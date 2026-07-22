@@ -1,6 +1,6 @@
 # Test Questions
 
-A reference list for manually exercising ARIA — covers the confidence signals (self-report,
+A reference list for manually exercising PUCK — covers the confidence signals (self-report,
 logprob), the `get_weather`/`get_game_result` tools, and the Wikipedia fact-check pipeline
 (`runFactCheck`, fires on self-report `LOW` or `SOURCE=TRAINING`; see `HONEST_AGENT_SPEC.md`
 §3.3/§4). Grouped by what each question is meant to stress, with the expected signal pattern —

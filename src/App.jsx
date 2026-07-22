@@ -30,7 +30,7 @@ function buildSystemPrompt(articles) {
       articles.map(a => `--- ${a.title} ---\n${a.extract}`).join("\n\n")
     : "\n\n(No knowledge base loaded. You are operating from general training memory only.)";
 
-  return `You are ARIA — an AI subject-matter expert agent. You are being interviewed for a Medium article about epistemic uncertainty in AI systems by a physicist-turned-ML-engineer.
+  return `You are PUCK — an AI subject-matter expert agent. You are being interviewed for a Medium article about epistemic uncertainty in AI systems by a physicist-turned-ML-engineer.
 
 Your epistemic rules:
 • When a question is covered by your Knowledge Base, answer confidently from it.
@@ -418,8 +418,8 @@ export default function HonestAgent() {
         <div style={{ width:7, height:7, borderRadius:"50%",
           background: isDeferring?"#ef4444":"#4ade80",
           boxShadow:`0 0 7px ${isDeferring?"#ef4444":"#4ade80"}` }}/>
-        <span style={{ fontFamily:"monospace", fontSize:12, color:MUTED, letterSpacing:"0.12em" }}>ARIA</span>
-        <span style={{ fontSize:12, color:MUTED }}>/ Abstaining Reasoning Intelligence Agent</span>
+        <span style={{ fontFamily:"monospace", fontSize:12, color:MUTED, letterSpacing:"0.12em" }}>PUCK</span>
+        <span style={{ fontSize:12, color:MUTED }}>/ Power Plays, Uncertainty, Confidence & Knowledge</span>
         {kb.length > 0 && (
           <span style={{ marginLeft:8, fontFamily:"monospace", fontSize:10,
             background:"#2d2050", color:"#818cf8", padding:"2px 8px", borderRadius:4 }}>
@@ -462,7 +462,7 @@ export default function HonestAgent() {
                     </button>
                   )}
                   <div style={{ fontSize:9, fontFamily:"monospace", color:BORDER, letterSpacing:"0.12em" }}>
-                    {m.role==="user" ? "INTERVIEWER" : "ARIA"}
+                    {m.role==="user" ? "INTERVIEWER" : "PUCK"}
                   </div>
                 </div>
                 <div style={{
@@ -564,7 +564,7 @@ export default function HonestAgent() {
 
             {isThinking && (
               <div style={{ display:"flex", flexDirection:"column", gap:4 }}>
-                <div style={{ fontSize:9, fontFamily:"monospace", color:BORDER }}>ARIA</div>
+                <div style={{ fontSize:9, fontFamily:"monospace", color:BORDER }}>PUCK</div>
                 <div style={{ padding:"11px 16px", background:"#1f2636", borderRadius:8,
                   border:`1px solid ${BORDER}`, fontFamily:"monospace", fontSize:12, color:MUTED }}>
                   {thinkLabel}
@@ -580,7 +580,7 @@ export default function HonestAgent() {
               ref={inputRef} value={input} disabled={isThinking}
               onChange={e => setInput(e.target.value)}
               onKeyDown={e => e.key==="Enter" && !e.shiftKey && sendMessage()}
-              placeholder="Ask ARIA something…"
+              placeholder="Ask PUCK something…"
               style={{ flex:1, background:SURF, border:`1px solid ${BORDER}`, borderRadius:6,
                 color:TEXT, padding:"10px 14px", fontSize:14, outline:"none" }}
             />

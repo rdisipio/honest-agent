@@ -12,8 +12,9 @@
 The article argues that AI agents should explicitly request human intervention when their
 epistemic uncertainty exceeds a calibrated threshold, rather than answering confidently at all
 times. The demo is the practical backbone of that argument: it lets the author conduct a live
-interview with ARIA (Abstaining Reasoning Intelligence Agent), observe the confidence signal in
-real time, and screenshot the results for the article.
+interview with PUCK (Power Plays, Uncertainty, Confidence & Knowledge — renamed from the
+original ARIA/"Abstaining Reasoning Intelligence Agent" to something hockey-native), observe
+the confidence signal in real time, and screenshot the results for the article.
 
 The project has two phases:
 
@@ -81,7 +82,7 @@ HonestAgent                    ← default export, all state lives here
 ├── Left panel (60%)
 │   ├── Message list           ← chatMsgs[], scrollable
 │   │   ├── User bubble         ← ↻ retry button, re-asks via sendMessage(m.content)
-│   │   └── ARIA bubble        ← includes confidence bar + source badge
+│   │   └── PUCK bubble        ← includes confidence bar + source badge
 │   └── Input bar
 └── Right panel (40%)
     ├── Tab bar                ← SIGNAL | KNOWLEDGE | TOOLS
@@ -102,7 +103,7 @@ HonestAgent                    ← default export, all state lives here
 
 #### `buildSystemPrompt(articles)`
 Builds the system prompt dynamically from the current knowledge base. When `articles` is
-non-empty, appends each article's extracted text as a named section. Instructs ARIA to:
+non-empty, appends each article's extracted text as a named section. Instructs PUCK to:
 - Draw confidently from the KB when relevant
 - Lower confidence and flag when falling back to training memory
 - Append `[CONFIDENCE: LOW|MID|HIGH]` and `[SOURCE: KB|TRAINING|TOOLS]` on every response —
@@ -211,7 +212,7 @@ iterations, against the local backend (§8 "Local backend (Phase 2)"):
 | `input` | `string` | Controlled input field |
 | `isThinking` | `boolean` | Disables input, shows thinking bubble |
 | `thinkLabel` | `string` | Text in thinking bubble ("Thinking…" / "Calling get_weather…") |
-| `currentConf` | `"LOW"\|"MID"\|"HIGH"\|null` | Self-reported confidence bucket from last ARIA response |
+| `currentConf` | `"LOW"\|"MID"\|"HIGH"\|null` | Self-reported confidence bucket from last PUCK response |
 | `currentLogprobConf` | `number\|null` | Raw logprob-derived confidence from last response (0–1), from the backend's `logprob_confidence` — bucketed for display via `bucketize()` |
 | `selfHist` | `("LOW"\|"MID"\|"HIGH")[]` | Self-reported bucket history this session, feeds `ConfidenceTrace` |
 | `logprobHist` | `("LOW"\|"MID"\|"HIGH")[]` | Logprob-derived bucket history this session (each raw value passed through `bucketize()` before storing) |
@@ -347,7 +348,7 @@ field. Not solvable by trigger-tuning alone; would need the fact-check to run in
 any model self-report (i.e., always) to fully close.
 
 **Interview format, not Q&A chatbot format:** The left panel labels speakers as INTERVIEWER /
-ARIA rather than USER / ASSISTANT to reinforce the article's framing: this is participant
+PUCK rather than USER / ASSISTANT to reinforce the article's framing: this is participant
 observation, not a product demo.
 
 **Retry appends, doesn't replace:** Clicking `↻ retry` on a question re-asks it as a brand new
@@ -499,7 +500,7 @@ computes `avg_logprob = mean(entry.logprob for entry in content)`, and attaches
 response has no logprobs (e.g. some builds omit them during constrained tool-call decoding).
 
 **P2-3 — Logprob vs. verbalized confidence comparison — done**
-Each ARIA message bubble shows a second row below the self-report row — `logprob LOW|MID|HIGH`
+Each PUCK message bubble shows a second row below the self-report row — `logprob LOW|MID|HIGH`
 (via `bucketize()`) — with a `⚠ vs self-report` flag whenever the two buckets don't match. The
 SIGNAL tab has a `LOGPROB CONFIDENCE` stat block below the self-report one, and the
 `ConfidenceTrace` dual-row grid (§3.3) plots both bucket histories turn-by-turn, so agreement/
