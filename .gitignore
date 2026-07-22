@@ -3,6 +3,9 @@ node_modules/
 .env
 .env.local
 
+# Downloaded GGUF models
+backend/models/
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[codz]

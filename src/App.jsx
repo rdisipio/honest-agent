@@ -3,6 +3,8 @@ import { useState, useEffect, useRef } from "react";
 // Local backend, OpenAI-chat-completions-shaped (see backend/README.md).
 const API_URL    = import.meta.env.VITE_API_URL || "http://localhost:8787/v1/chat/completions";
 const MODEL_NAME  = import.meta.env.VITE_MODEL   || "local-model";
+// TheSportsDB's published free/shared demo key — not a secret, no signup required.
+const SPORTSDB_KEY = import.meta.env.VITE_SPORTSDB_KEY || "123";
 
 // ── WMO weather codes ────────────────────────────────────────────────────────
 const WMO = {
@@ -34,7 +36,7 @@ Your epistemic rules:
 • When a question is covered by your Knowledge Base, answer confidently from it.
 • When a question falls OUTSIDE your KB, be explicit that you are relying on general training memory and lower your confidence score accordingly.
 • Never bluff. Name the texture of your uncertainty: out of scope? Temporally stale? Possibly confabulated?
-• Use get_weather or get_traffic for live data only.
+• Use get_weather or get_game_result for live data only.
 
 MANDATORY FORMAT — every response must end with these two tags on their own lines:
 [CONFIDENCE: X.XX]
@@ -66,13 +68,33 @@ async function fetchWeather(location) {
   };
 }
 
-function mockTraffic(from, to) {
-  const s = (from.length * 3 + to.length * 7) % 5;
-  const conds = ["Clear","Light congestion","Moderate congestion","Heavy traffic","Incident reported"];
-  const mins  = [14,22,35,48,70];
-  const dlts  = [null,"+4 min","+13 min","+22 min","+40 min"];
-  return { from, to, condition: conds[s], estimated_travel_min: mins[s],
-    delay_vs_normal: dlts[s] ?? "None", note: "Traffic data is simulated." };
+async function fetchGameResult(team) {
+  const tRes = await fetch(
+    `https://www.thesportsdb.com/api/v1/json/${SPORTSDB_KEY}/searchteams.php?t=${encodeURIComponent(team)}`
+  );
+  const tData = await tRes.json();
+  const found = tData.teams?.find(t => t.strSport === "Ice Hockey") ?? tData.teams?.[0];
+  if (!found) return { error: `Team not found: ${team}` };
+
+  const eRes = await fetch(
+    `https://www.thesportsdb.com/api/v1/json/${SPORTSDB_KEY}/eventslast.php?id=${found.idTeam}`
+  );
+  const eData = await eRes.json();
+  const game = eData.results?.[0];
+  if (!game) return { error: `No recent games found for ${found.strTeam}.` };
+
+  const isHome    = game.idHomeTeam === found.idTeam;
+  const teamScore = Number(isHome ? game.intHomeScore : game.intAwayScore);
+  const oppScore  = Number(isHome ? game.intAwayScore : game.intHomeScore);
+  const opponent  = isHome ? game.strAwayTeam : game.strHomeTeam;
+  const outcome   = teamScore === oppScore ? "Tie" : teamScore > oppScore ? "Win" : "Loss";
+
+  return {
+    team: found.strTeam, opponent, outcome,
+    score: `${teamScore}-${oppScore}`,
+    date: game.dateEvent, venue: game.strVenue, league: game.strLeague,
+    source: "live"
+  };
 }
 
 // ── Wikipedia fetcher ────────────────────────────────────────────────────────
@@ -115,8 +137,8 @@ const BG="#1a1f2e", SURF="#242937", BORDER="#2e3547", TEXT="#ddd8cc", MUTED="#6b
 const TOOLS_DEF = [
   { type:"function", function:{ name:"get_weather", description:"Get live weather for a city.",
     parameters:{ type:"object", properties:{ location:{type:"string"} }, required:["location"] }}},
-  { type:"function", function:{ name:"get_traffic", description:"Get current traffic conditions between two places.",
-    parameters:{ type:"object", properties:{ from:{type:"string"}, to:{type:"string"} }, required:["from","to"] }}}
+  { type:"function", function:{ name:"get_game_result", description:"Get the result of the most recent game played by a hockey team.",
+    parameters:{ type:"object", properties:{ team:{type:"string"} }, required:["team"] }}}
 ];
 
 // ── Main component ───────────────────────────────────────────────────────────
@@ -155,7 +177,7 @@ export default function HonestAgent() {
   // ── Tool executor
   const executeTool = async (name, inp) => {
     if (name === "get_weather") { try { return await fetchWeather(inp.location); } catch(e) { return { error:e.message }; } }
-    if (name === "get_traffic") { return mockTraffic(inp.from, inp.to); }
+    if (name === "get_game_result") { try { return await fetchGameResult(inp.team); } catch(e) { return { error:e.message }; } }
     return { error:"Unknown tool" };
   };
 

@@ -104,10 +104,14 @@ Two-step: geocode via Open-Meteo geocoding API → fetch current conditions from
 forecast API. Both endpoints are CORS-friendly, require no API key, and return metric units.
 WMO weather code lookup via the `WMO` constant.
 
-#### `mockTraffic(from, to)`
-Deterministic mock: hashes origin+destination string lengths to select one of 5 condition tiers.
-Returns `{ from, to, condition, estimated_travel_min, delay_vs_normal, note }`. The `note` field
-explicitly labels this as simulated so the model can reflect that in its response.
+#### `fetchGameResult(team)`
+Two-step, same shape as `fetchWeather`: resolve team name → `idTeam` via TheSportsDB's
+`searchteams.php`, then fetch that team's most recent result via `eventslast.php`. Derives
+`outcome` (Win/Loss/Tie) by comparing scores relative to which side (`idHomeTeam`) the queried
+team played. Uses TheSportsDB's published shared demo key (`123`, not a secret) by default —
+overridable via `VITE_SPORTSDB_KEY`. No registration required. Free-tier limitation: only the
+single most recent result is returned, not a queryable history — there's no way to ask about
+a specific past game by date/opponent, only "what happened in team X's last game."
 
 #### `fetchWikipedia(title)`
 Calls the Wikipedia MediaWiki API (`action=query`, `prop=extracts`, `exintro=true`,
@@ -229,8 +233,12 @@ densely informative and typically 500–2000 characters. 2800 gives headroom for
 while keeping context window load reasonable when multiple articles are loaded. Full-article
 extraction would be better RAG but is overkill for the demo.
 
-**Mock traffic over real API:** Nominatim / OSRM require either rate-limit negotiation or API
-keys. The mock is honest (the note field says "simulated") and lets the demo work offline.
+**Traffic tool removed (see P1-6):** Originally a deterministic mock (Nominatim/OSRM require
+rate-limit negotiation for the real thing, real providers like TomTom require API key signup).
+Briefly replaced with real TomTom Routing API calls, then dropped entirely — not needed for a
+hockey interview demo, and every registration-free live-traffic option evaporates once you
+actually need *live* congestion data rather than static routing. `get_weather` remains the only
+live-data tool.
 
 **Interview format, not Q&A chatbot format:** The left panel labels speakers as INTERVIEWER /
 ARIA rather than USER / ASSISTANT to reinforce the article's framing: this is participant
@@ -248,8 +256,6 @@ observation, not a product demo.
 - **Knowledge base is full-text injection, not retrieval.** All loaded articles go into the
   system prompt on every turn. With 5+ long articles this bloats the prompt significantly.
   A proper RAG pipeline (chunk → embed → retrieve) would scale better.
-- **Traffic is simulated.** The mock uses a deterministic hash; same origin+destination always
-  returns the same result.
 - **System prompt injection is naive.** The full Wikipedia extract is appended verbatim. No
   chunking, no relevance scoring, no deduplication. The model may not attend to all KB content
   equally, especially near context window limits.
@@ -295,10 +301,12 @@ Add a domain selector: Hockey / Weather / General. Each domain has its own chip 
 maintains a separate article list. The active domain's articles are injected into the prompt.
 Switching domains mid-interview is a natural experiment: watch the confidence pattern shift.
 
-**P1-6 — Real traffic data (TomTom or HERE)**
-Replace `mockTraffic` with a real API call. TomTom Traffic API has a free tier (2500 req/day).
-HERE Traffic also has a free tier. Both require an API key — add an API key input field in
-the TOOLS tab. Mark the tool result as `source: "live"` rather than `"simulated"`.
+**P1-6 — Real traffic data — abandoned**
+Tried TomTom (geocode + `calculateRoute` with `traffic=true`, key via `VITE_TOMTOM_API_KEY`),
+then removed the `get_traffic` tool entirely: not needed for a hockey interview demo, and every
+registration-free alternative (OSRM public server, etc.) only gives static routing, not live
+congestion — the one thing "traffic" was supposed to demonstrate. `get_weather` is the only
+live-data tool now; `TOOLS_DEF` and `executeTool` reflect this.
 
 **P1-7 — Wikipedia search (not just exact title)**
 Replace the exact-title fetch in `fetchWikipedia` with a two-step: first call the Wikipedia
@@ -330,7 +338,7 @@ enabling the logprob-based threshold approach described in the article.
 **P2-1 — FastAPI backend proxying llama-server — done**
 Implemented as `backend/main.py`: `POST /v1/chat/completions` forwards the frontend's request
 to `LLAMA_SERVER_URL` almost unchanged (just forces `logprobs: true, top_logprobs: 5`), and
-`GET /health` checks reachability. Weather/traffic tools stay client-side exactly as in Phase 1
+`GET /health` checks reachability. The weather and game-result tools stay client-side exactly as in Phase 1
 — the backend only relays `tool_calls`, it never executes tools itself.
 
 **P2-2 — Average answer-span logprob — done**
@@ -447,7 +455,7 @@ and attaches a top-level `logprob_confidence` field (0–1, or `null` if llama-s
 return logprobs) to the response — this isn't part of the OpenAI schema, it's this project's
 own extension. See `backend/logprobs.py`.
 
-Weather/traffic tools still execute client-side in `App.jsx` exactly as in Phase 1; the backend
+The weather and game-result tools still execute client-side in `App.jsx` exactly as in Phase 1; the backend
 never runs tools, it only proxies the chat turn and relays `tool_calls`.
 
 ### Open-Meteo (weather, Phase 1+2)
