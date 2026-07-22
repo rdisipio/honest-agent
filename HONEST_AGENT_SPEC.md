@@ -126,7 +126,16 @@ a specific past game by date/opponent, only "what happened in team X's last game
 #### `fetchWikipedia(title)`
 Calls the Wikipedia MediaWiki API (`action=query`, `prop=extracts`, `exintro=true`,
 `explaintext=true`, `origin=*`). Extracts the intro section only, capped at 2800 characters.
-Throws on missing articles. Returns `{ title, extract }`.
+Throws on missing articles. Returns `{ title, extract }`. Used by the KB loader
+(`addArticle`) — the short summary is what belongs in the system prompt.
+
+#### `fetchWikipediaFull(title)`
+Same endpoint, same shape, minus `exintro` — full article body as plain text, capped at 8000
+characters instead of 2800. Used only by `runFactCheck`: specific facts (attendance figures,
+exact dates, statistics) usually live past the lead paragraph, so the KB loader's intro-only
+fetch was systematically too shallow for verification. Kept as a separate function rather than
+a shared one with a parameter, since the two call sites want genuinely different amounts of
+text for different reasons.
 
 #### `ConfidenceTrace({ selfHist, logprobHist })`
 Replaces the earlier SVG `Sparkline`. A line chart implies interpolation between points, which
@@ -153,7 +162,8 @@ trigger" for why it exists and when it fires). Three steps, each able to fail in
 without crashing the turn:
 1. **Extract** — one `chatJSON` call: given the question and answer, name the single most
    checkable factual claim and the Wikipedia article title that would verify it.
-2. **Fetch** — reuses `fetchWikipedia(title)` unchanged. A missing article is a valid outcome
+2. **Fetch** — uses `fetchWikipediaFull(title)` (full article body, not the KB loader's
+   intro-only `fetchWikipedia`). A missing article is a valid outcome
    (`verdict: "UNVERIFIABLE"`), not an error path.
 3. **Judge** — a second `chatJSON` call: given the claim and the fetched excerpt, return
    `SUPPORTED`, `CONTRADICTED`, or `UNVERIFIABLE` plus a one-sentence explanation.
@@ -360,6 +370,23 @@ observation, not a product demo.
 - **Claim extraction assumes one checkable claim per answer.** `runFactCheck` step 1 asks for
   "the single most specific... claim" — a longer answer with multiple factual assertions only
   gets one checked; the rest go unverified.
+- **Fixed: fact-check used to only see the article's intro** (`fetchWikipedia`'s `exintro=true`,
+  2800-char cap — fine for a KB summary, but many specific facts live in the article body, not
+  the lead paragraph). `runFactCheck` now uses `fetchWikipediaFull` — same endpoint without
+  `exintro`, capped at 8000 chars instead, kept as a separate function since the KB loader
+  genuinely still wants the short intro-only summary. Verified directly: the "1917–18 NHL
+  season" article contains `"drew only 700 fans"` (a real attendance figure, for the Wanderers'
+  home opener) at character offset ~7,072 — completely unreachable under the old 2,800-char
+  intro-only fetch, reachable now.
+- **Claim/title precision still limits what the deeper fetch can catch.** Two separate,
+  still-open issues surfaced testing the fix above: (1) extraction named `"1917 NHL season"`
+  for a query about 1917, when the real title is `"1917–18 NHL season"` — an exact-title miss
+  identical in kind to the KB loader's existing fragility (see P1-7). (2) even with the right
+  article fetched, a vague extracted claim ("the first NHL game had a specific attendance
+  figure") doesn't reliably connect to a specific fact buried in prose (the "700 fans" sentence
+  is about the Wanderers' home opener specifically, and Dec 19 1917 had two simultaneous league
+  games — "the first game" is itself genuinely ambiguous). More available text doesn't help if
+  the claim being checked isn't specific enough to line up with it.
 
 ---
 

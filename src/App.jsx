@@ -103,7 +103,11 @@ async function fetchGameResult(team) {
   };
 }
 
-// ── Wikipedia fetcher ────────────────────────────────────────────────────────
+// ── Wikipedia fetchers ───────────────────────────────────────────────────────
+// Two different fetches, not one shared one: the KB loader wants a short
+// summary for the system prompt, fact-checking wants enough body text to
+// actually contain specific facts (dates, stats) that rarely appear in the
+// lead paragraph alone.
 async function fetchWikipedia(title) {
   const slug = title.trim().replace(/\s+/g, "_");
   const url = `https://en.wikipedia.org/w/api.php?action=query&titles=${encodeURIComponent(slug)}&prop=extracts&exintro=true&explaintext=true&format=json&origin=*`;
@@ -111,6 +115,20 @@ async function fetchWikipedia(title) {
   const page = Object.values(data.query.pages)[0];
   if (page.missing !== undefined) throw new Error(`Article not found: "${title}"`);
   return { title: page.title, extract: page.extract.slice(0, 2800) };
+}
+
+async function fetchWikipediaFull(title) {
+  const slug = title.trim().replace(/\s+/g, "_");
+  const url = `https://en.wikipedia.org/w/api.php?action=query&titles=${encodeURIComponent(slug)}&prop=extracts&explaintext=true&format=json&origin=*`;
+  const data = await (await fetch(url)).json();
+  const page = Object.values(data.query.pages)[0];
+  if (page.missing !== undefined) throw new Error(`Article not found: "${title}"`);
+  // No exintro — full article body. Capped at 8000 chars (~2000 tokens): big
+  // enough to reach past the lead paragraph into most articles' body content,
+  // small enough to leave headroom in a modest local context window (the
+  // judge call only carries the claim + this excerpt, so total prompt stays
+  // well under even a 4096-token ctx-size).
+  return { title: page.title, extract: page.extract.slice(0, 8000) };
 }
 
 // ── Fact-check helpers ───────────────────────────────────────────────────────
@@ -255,7 +273,7 @@ export default function HonestAgent() {
 
       let article;
       try {
-        article = await fetchWikipedia(extraction.title);
+        article = await fetchWikipediaFull(extraction.title);
       } catch {
         patch({ status:"done", verdict:"UNVERIFIABLE", claim:extraction.claim, title:extraction.title,
           explanation:`No Wikipedia article found for "${extraction.title}".` });
@@ -486,24 +504,34 @@ export default function HonestAgent() {
                     );
                   })()}
                   {m.factCheck && (
-                    <div style={{ marginTop:6, fontFamily:"monospace", fontSize:9 }}>
+                    <div style={{ marginTop:6, fontFamily:"monospace", fontSize:9, lineHeight:1.6 }}>
                       {m.factCheck.status === "checking" ? (
                         <span style={{ color:MUTED }}>🔍 checking against Wikipedia…</span>
-                      ) : m.factCheck.verdict === "SUPPORTED" ? (
-                        <span style={{ color:"#4ade80" }}
-                          title={m.factCheck.claim}>
-                          ✓ Wikipedia ({m.factCheck.title}) — supported
-                        </span>
-                      ) : m.factCheck.verdict === "CONTRADICTED" ? (
-                        <span style={{ color:"#ef4444" }}
-                          title={m.factCheck.claim}>
-                          ✗ Wikipedia contradicts ({m.factCheck.title}): {m.factCheck.explanation}
-                        </span>
                       ) : (
-                        <span style={{ color:MUTED }}
-                          title={m.factCheck.claim}>
-                          ? Wikipedia: {m.factCheck.explanation || "inconclusive"}
-                        </span>
+                        <>
+                          <div style={{ color:
+                            m.factCheck.verdict==="SUPPORTED" ? "#4ade80" :
+                            m.factCheck.verdict==="CONTRADICTED" ? "#ef4444" : MUTED }}>
+                            {m.factCheck.verdict==="SUPPORTED" ? "✓ fact-check: supported" :
+                             m.factCheck.verdict==="CONTRADICTED" ? `✗ fact-check: contradicted — ${m.factCheck.explanation}` :
+                             `? fact-check: ${m.factCheck.explanation || "inconclusive"}`}
+                          </div>
+                          <div style={{ color:MUTED, marginTop:2 }}>
+                            {m.factCheck.title ? (
+                              <>
+                                checked against{" "}
+                                <a href={`https://en.wikipedia.org/wiki/${encodeURIComponent(m.factCheck.title.replace(/ /g,"_"))}`}
+                                  target="_blank" rel="noreferrer" title={m.factCheck.claim}
+                                  style={{ color:"#818cf8" }}>
+                                  {m.factCheck.title}
+                                </a>
+                                {" "}· freshly fetched, not your loaded KB
+                              </>
+                            ) : (
+                              "no Wikipedia article identified to check"
+                            )}
+                          </div>
+                        </>
                       )}
                     </div>
                   )}
