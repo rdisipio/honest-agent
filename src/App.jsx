@@ -165,11 +165,11 @@ function ConfidenceTrace({ selfHist, logprobHist }) {
   if (n < 1) return null;
   const cell = (bucket, key) => (
     <div key={key} title={bucket ?? "no data"} style={{ width:10, height:10, borderRadius:2,
-      background: bucket ? bucketColor(bucket) : "#2a3248" }}/>
+      background: bucket ? bucketColor(bucket) : "#e2e8f0" }}/>
   );
   const row = (label, hist) => (
     <div style={{ display:"flex", alignItems:"center", gap:6 }}>
-      <span style={{ fontFamily:"monospace", fontSize:8, color:MUTED, minWidth:44 }}>{label}</span>
+      <span style={{ fontFamily:"monospace", fontSize:10, color:MUTED, minWidth:44 }}>{label}</span>
       <div style={{ display:"flex", gap:3, flexWrap:"wrap" }}>
         {Array.from({ length:n }, (_,i) => cell(hist[i], `${label}${i}`))}
       </div>
@@ -187,9 +187,9 @@ function ConfidenceTrace({ selfHist, logprobHist }) {
 // Turns a raw logprob confidence (0-1) into the same LOW/MID/HIGH vocabulary the
 // model uses for its self-report, so the two signals are directly comparable.
 const bucketize   = p => p==null ? null : p<0.4 ? "LOW" : p<0.65 ? "MID" : "HIGH";
-const bucketColor = b => b==null?"#6b7a99": b==="LOW"?"#ef4444": b==="MID"?"#f0a500":"#4ade80";
+const bucketColor = b => b==null?"#5b6b85": b==="LOW"?"#dc2626": b==="MID"?"#b45309":"#16a34a";
 const bucketLabel = b => b==null?"—": b==="LOW"?"Low — deferring": b==="MID"?"Moderate":"High";
-const srcColor  = s => s==="KB"?"#818cf8": s==="TOOLS"?"#f0a500":"#6b7a99";
+const srcColor  = s => s==="KB"?ACCENT: s==="TOOLS"?"#b45309":TRAINING_PURPLE;
 const srcBadge  = s => s==="KB"?"◈ KB": s==="TOOLS"?"⟶ Tools":"⊘ Training";
 const BUCKET_LEVEL = { LOW:1, MID:2, HIGH:3 };
 
@@ -209,7 +209,22 @@ function BucketBar({ bucket, size="sm" }) {
 }
 
 // ── Design tokens ────────────────────────────────────────────────────────────
-const BG="#1a1f2e", SURF="#242937", BORDER="#2e3547", TEXT="#ddd8cc", MUTED="#6b7a99";
+// A hockey rink, not a dark-mode dashboard: ice-white surfaces, rink-blue
+// accent, a red wordmark and a couple of literal red/blue "rink lines" on
+// structural dividers (header, panel split). Confidence colours (red/amber/
+// green) are deepened from their dark-theme values for contrast on white —
+// same semantics (LOW/MID/HIGH), same red/amber/green, just legible now.
+const BG="#f2f6fb", SURF="#ffffff", BORDER="#d6dee8", TEXT="#182437", MUTED="#5b6b85";
+const ACCENT="#1e4d8c", ACCENT_BG="#dbe7f8", WORDMARK_RED="#c8102e";
+const RINK_BLUE="#1e4d8c", RINK_RED="#c8102e";
+const CARD_TINT="#eef3f9"; // PUCK's own bubble bg — a hair bluer than pure white
+// BORDER (#d6dee8) is a hairline-divider colour — legible as a 1px line, but
+// near-invisible as text on a white background. FAINT is for de-emphasized
+// text (labels, counts, placeholders) that still needs to actually be read.
+const FAINT="#94a3b8";
+// TRAINING used to share MUTED's blue-grey, which read as barely distinguishable
+// from ACCENT's blue (KB) at a glance — a dedicated purple fixes that.
+const TRAINING_PURPLE="#7c3aed";
 
 const TOOLS_DEF = [
   { type:"function", function:{ name:"get_weather", description:"Get live weather for a city.",
@@ -402,9 +417,9 @@ export default function HonestAgent() {
   const col     = bucketColor(currentConf);
   const tabBtn  = (id, label) => ({
     flex:1, background:"transparent", border:"none",
-    borderBottom: tab===id ? "2px solid #818cf8" : "2px solid transparent",
+    borderBottom: tab===id ? `2px solid ${ACCENT}` : "2px solid transparent",
     color: tab===id ? TEXT : MUTED,
-    padding:"10px 0", fontSize:9, fontFamily:"monospace",
+    padding:"10px 0", fontSize:11, fontFamily:"monospace",
     letterSpacing:"0.1em", cursor:"pointer"
   });
 
@@ -412,37 +427,37 @@ export default function HonestAgent() {
     <div style={{ background:BG, height:"100vh", color:TEXT, fontFamily:"system-ui,sans-serif",
       display:"flex", flexDirection:"column", overflow:"hidden" }}>
 
-      {/* ── Header ── */}
-      <div style={{ borderBottom:`1px solid ${BORDER}`, padding:"10px 20px",
+      {/* ── Header — the red line, like centre ice ── */}
+      <div style={{ borderBottom:`2px solid ${RINK_RED}`, padding:"10px 20px",
         display:"flex", alignItems:"center", gap:10, flexShrink:0 }}>
         <div style={{ width:7, height:7, borderRadius:"50%",
-          background: isDeferring?"#ef4444":"#4ade80",
-          boxShadow:`0 0 7px ${isDeferring?"#ef4444":"#4ade80"}` }}/>
-        <span style={{ fontFamily:"monospace", fontSize:12, color:MUTED, letterSpacing:"0.12em" }}>PUCK</span>
-        <span style={{ fontSize:12, color:MUTED }}>/ Power Plays, Uncertainty, Confidence & Knowledge</span>
+          background: isDeferring?"#dc2626":"#16a34a",
+          boxShadow:`0 0 7px ${isDeferring?"#dc2626":"#16a34a"}` }}/>
+        <span style={{ fontFamily:"monospace", fontSize:14, color:WORDMARK_RED, letterSpacing:"0.12em", fontWeight:700 }}>PUCK</span>
+        <span style={{ fontSize:14, color:MUTED }}>/ Power Plays, Uncertainty, Confidence & Knowledge</span>
         {kb.length > 0 && (
-          <span style={{ marginLeft:8, fontFamily:"monospace", fontSize:10,
-            background:"#2d2050", color:"#818cf8", padding:"2px 8px", borderRadius:4 }}>
+          <span style={{ marginLeft:8, fontFamily:"monospace", fontSize:12,
+            background:ACCENT_BG, color:ACCENT, padding:"2px 8px", borderRadius:4 }}>
             📚 {kb.length} article{kb.length!==1?"s":""} loaded
           </span>
         )}
-        <span style={{ marginLeft:"auto", fontFamily:"monospace", fontSize:10, color:BORDER }}>v0.2 · hockey</span>
+        <span style={{ marginLeft:"auto", fontFamily:"monospace", fontSize:12, color:FAINT }}>v0.2 · hockey</span>
       </div>
 
       {/* ── Body ── */}
       <div style={{ display:"flex", flex:1, overflow:"hidden", minHeight:0 }}>
 
-        {/* ── Left: Interview chat ── */}
-        <div style={{ flex:"0 0 60%", display:"flex", flexDirection:"column", borderRight:`1px solid ${BORDER}` }}>
+        {/* ── Left: Interview chat — the blue line, like the zone divider ── */}
+        <div style={{ flex:"0 0 60%", display:"flex", flexDirection:"column", borderRight:`2px solid ${RINK_BLUE}` }}>
 
           {/* Messages */}
           <div ref={chatRef} style={{ flex:1, overflowY:"auto", padding:"20px 24px",
             display:"flex", flexDirection:"column", gap:18 }}>
             {chatMsgs.length === 0 && (
-              <div style={{ textAlign:"center", color:BORDER, fontFamily:"monospace", fontSize:12, marginTop:48 }}>
-                <div style={{ fontSize:28, marginBottom:10, opacity:0.4 }}>◎</div>
+              <div style={{ textAlign:"center", color:FAINT, fontFamily:"monospace", fontSize:14, marginTop:48 }}>
+                <div style={{ fontSize:32, marginBottom:10, opacity:0.4 }}>◎</div>
                 <div>Load hockey articles in the KNOWLEDGE tab, then begin the interview.</div>
-                <div style={{ marginTop:6, fontSize:11, color:"#2a3248" }}>
+                <div style={{ marginTop:6, fontSize:13, color:FAINT }}>
                   Try: "Who was Gretzky?" · "Explain icing" · "When did the Leafs last win the Cup?"
                 </div>
               </div>
@@ -456,23 +471,23 @@ export default function HonestAgent() {
                     <button onClick={() => sendMessage(m.content)} disabled={isThinking}
                       title="Re-ask this exact question as a new turn — the original stays put"
                       style={{ background:"transparent", border:"none", padding:0,
-                        fontFamily:"monospace", fontSize:9, letterSpacing:"0.05em",
+                        fontFamily:"monospace", fontSize:11, letterSpacing:"0.05em",
                         color:isThinking?BORDER:MUTED, cursor:isThinking?"not-allowed":"pointer" }}>
                       ↻ retry
                     </button>
                   )}
-                  <div style={{ fontSize:9, fontFamily:"monospace", color:BORDER, letterSpacing:"0.12em" }}>
+                  <div style={{ fontSize:11, fontFamily:"monospace", color:FAINT, letterSpacing:"0.12em" }}>
                     {m.role==="user" ? "INTERVIEWER" : "PUCK"}
                   </div>
                 </div>
                 <div style={{
-                  maxWidth:"88%", padding:"12px 16px", borderRadius:8, fontSize:14, lineHeight:1.7,
-                  background: m.role==="user" ? SURF : m.deferring ? "rgba(239,68,68,0.07)" : "#1f2636",
-                  border:`1px solid ${m.role==="assistant"&&m.deferring ? "rgba(239,68,68,0.3)" : BORDER}`,
+                  maxWidth:"88%", padding:"12px 16px", borderRadius:8, fontSize:16, lineHeight:1.7,
+                  background: m.role==="user" ? SURF : m.deferring ? "rgba(220,38,38,0.08)" : CARD_TINT,
+                  border:`1px solid ${m.role==="assistant"&&m.deferring ? "rgba(220,38,38,0.35)" : BORDER}`,
                   color:TEXT
                 }}>
                   {m.deferring && (
-                    <div style={{ fontFamily:"monospace", fontSize:9, color:"#ef4444",
+                    <div style={{ fontFamily:"monospace", fontSize:11, color:"#dc2626",
                       marginBottom:8, letterSpacing:"0.1em" }}>
                       ⚠ DEFERRING TO HUMAN — self-reported confidence is LOW
                     </div>
@@ -481,17 +496,17 @@ export default function HonestAgent() {
                   {m.confidence != null && (
                     <div style={{ marginTop:10, paddingTop:8, borderTop:`1px solid ${BORDER}`,
                       display:"flex", alignItems:"center", gap:8 }}>
-                      <span style={{ fontFamily:"monospace", fontSize:9, color:MUTED, minWidth:66 }}
+                      <span style={{ fontFamily:"monospace", fontSize:11, color:MUTED, minWidth:66 }}
                         title="Verbalized confidence: the model's own self-reported [CONFIDENCE] tag.">
                         self-report
                       </span>
-                      <span style={{ fontFamily:"monospace", fontSize:11,
+                      <span style={{ fontFamily:"monospace", fontSize:13,
                         color:bucketColor(m.confidence), minWidth:34 }}>
                         {m.confidence}
                       </span>
                       <BucketBar bucket={m.confidence}/>
                       {m.source && (
-                        <span style={{ fontFamily:"monospace", fontSize:9,
+                        <span style={{ fontFamily:"monospace", fontSize:11,
                           color:srcColor(m.source), whiteSpace:"nowrap" }}>
                           {srcBadge(m.source)}
                         </span>
@@ -502,17 +517,17 @@ export default function HonestAgent() {
                     const lb = bucketize(m.logprobConfidence);
                     return (
                       <div style={{ marginTop:6, display:"flex", alignItems:"center", gap:8 }}>
-                        <span style={{ fontFamily:"monospace", fontSize:9, color:MUTED, minWidth:66 }}
+                        <span style={{ fontFamily:"monospace", fontSize:11, color:MUTED, minWidth:66 }}
                           title={`Logprob confidence: exp(avg token logprob) over the answer span (${(m.logprobConfidence*100).toFixed(0)}%), bucketed the same way as the self-report.`}>
                           logprob
                         </span>
-                        <span style={{ fontFamily:"monospace", fontSize:11,
+                        <span style={{ fontFamily:"monospace", fontSize:13,
                           color:bucketColor(lb), minWidth:34 }}>
                           {lb}
                         </span>
                         <BucketBar bucket={lb}/>
                         {m.confidence != null && m.confidence !== lb && (
-                          <span style={{ fontFamily:"monospace", fontSize:9, color:"#f0a500", whiteSpace:"nowrap" }}
+                          <span style={{ fontFamily:"monospace", fontSize:11, color:"#b45309", whiteSpace:"nowrap" }}
                             title="The model's self-reported bucket and the logprob-derived bucket don't match.">
                             ⚠ vs self-report
                           </span>
@@ -521,15 +536,15 @@ export default function HonestAgent() {
                     );
                   })()}
                   {m.factCheck && (
-                    <div style={{ marginTop:6, fontFamily:"monospace", fontSize:9, lineHeight:1.6 }}>
+                    <div style={{ marginTop:6, fontFamily:"monospace", fontSize:11, lineHeight:1.6 }}>
                       {m.factCheck.status === "checking" ? (
                         <span style={{ color:MUTED }}>🔍 checking against Wikipedia…</span>
                       ) : (
                         <>
                           <div style={{ color:
-                            m.factCheck.verdict==="SUPPORTED" ? "#4ade80" :
-                            m.factCheck.verdict==="CONTRADICTED" ? "#ef4444" :
-                            m.factCheck.verdict==="NO_ARTICLE" ? "#f0a500" : MUTED }}>
+                            m.factCheck.verdict==="SUPPORTED" ? "#16a34a" :
+                            m.factCheck.verdict==="CONTRADICTED" ? "#dc2626" :
+                            m.factCheck.verdict==="NO_ARTICLE" ? "#b45309" : MUTED }}>
                             {m.factCheck.verdict==="SUPPORTED" ? "✓ fact-check: supported" :
                              m.factCheck.verdict==="CONTRADICTED" ? `✗ fact-check: contradicted — ${m.factCheck.explanation}` :
                              m.factCheck.verdict==="NO_ARTICLE" ? "⚠ fact-check: no Wikipedia article for this name — possible fabrication" :
@@ -545,7 +560,7 @@ export default function HonestAgent() {
                                 checked against{" "}
                                 <a href={`https://en.wikipedia.org/wiki/${encodeURIComponent(m.factCheck.title.replace(/ /g,"_"))}`}
                                   target="_blank" rel="noreferrer" title={m.factCheck.claim}
-                                  style={{ color:"#818cf8" }}>
+                                  style={{ color:ACCENT }}>
                                   {m.factCheck.title}
                                 </a>
                                 {" "}· freshly fetched, not your loaded KB
@@ -564,9 +579,9 @@ export default function HonestAgent() {
 
             {isThinking && (
               <div style={{ display:"flex", flexDirection:"column", gap:4 }}>
-                <div style={{ fontSize:9, fontFamily:"monospace", color:BORDER }}>PUCK</div>
-                <div style={{ padding:"11px 16px", background:"#1f2636", borderRadius:8,
-                  border:`1px solid ${BORDER}`, fontFamily:"monospace", fontSize:12, color:MUTED }}>
+                <div style={{ fontSize:11, fontFamily:"monospace", color:FAINT }}>PUCK</div>
+                <div style={{ padding:"11px 16px", background:CARD_TINT, borderRadius:8,
+                  border:`1px solid ${BORDER}`, fontFamily:"monospace", fontSize:14, color:MUTED }}>
                   {thinkLabel}
                 </div>
               </div>
@@ -582,13 +597,13 @@ export default function HonestAgent() {
               onKeyDown={e => e.key==="Enter" && !e.shiftKey && sendMessage()}
               placeholder="Ask PUCK something…"
               style={{ flex:1, background:SURF, border:`1px solid ${BORDER}`, borderRadius:6,
-                color:TEXT, padding:"10px 14px", fontSize:14, outline:"none" }}
+                color:TEXT, padding:"10px 14px", fontSize:16, outline:"none" }}
             />
             <button onClick={() => sendMessage()} disabled={isThinking||!input.trim()}
               style={{ background:isThinking||!input.trim()?SURF:"#2e3d5c",
                 border:`1px solid ${BORDER}`, borderRadius:6,
                 color:isThinking||!input.trim()?MUTED:TEXT,
-                padding:"10px 18px", fontSize:12, fontFamily:"monospace",
+                padding:"10px 18px", fontSize:14, fontFamily:"monospace",
                 cursor:isThinking||!input.trim()?"not-allowed":"pointer" }}>
               {isThinking ? "…" : "Send →"}
             </button>
@@ -612,57 +627,57 @@ export default function HonestAgent() {
           {/* ── SIGNAL tab ── */}
           {tab==="signal" && (
             <div style={{ flex:1, overflowY:"auto", padding:"18px 20px" }}>
-              <div style={{ fontSize:9, fontFamily:"monospace", color:MUTED,
+              <div style={{ fontSize:11, fontFamily:"monospace", color:MUTED,
                 letterSpacing:"0.13em", marginBottom:12 }}>SELF-REPORTED CONFIDENCE</div>
 
               <div style={{ display:"flex", alignItems:"baseline", gap:10, marginBottom:10 }}>
-                <span style={{ fontFamily:"monospace", fontSize:32, fontWeight:700,
+                <span style={{ fontFamily:"monospace", fontSize:36, fontWeight:700,
                   color:col, lineHeight:1, transition:"color 0.4s" }}>
                   {currentConf ?? "—"}
                 </span>
-                <span style={{ fontFamily:"monospace", fontSize:10, color:col }}>
+                <span style={{ fontFamily:"monospace", fontSize:12, color:col }}>
                   {bucketLabel(currentConf)}
                 </span>
               </div>
               <BucketBar bucket={currentConf} size="lg"/>
               <div style={{ display:"flex", justifyContent:"space-between", marginTop:8, marginBottom:24 }}>
-                <span style={{ fontFamily:"monospace", fontSize:10, color:"#f0a500" }}>
+                <span style={{ fontFamily:"monospace", fontSize:12, color:"#b45309" }}>
                   auto-defer on LOW
                 </span>
-                <span style={{ fontFamily:"monospace", fontSize:10, color:BORDER }}>n={selfHist.length}</span>
+                <span style={{ fontFamily:"monospace", fontSize:12, color:FAINT }}>n={selfHist.length}</span>
               </div>
 
-              <div style={{ fontSize:9, fontFamily:"monospace", color:MUTED,
+              <div style={{ fontSize:11, fontFamily:"monospace", color:MUTED,
                 letterSpacing:"0.13em", marginBottom:12 }}>LOGPROB CONFIDENCE</div>
               <div style={{ display:"flex", alignItems:"baseline", gap:10, marginBottom:10 }}>
-                <span style={{ fontFamily:"monospace", fontSize:32, fontWeight:700,
+                <span style={{ fontFamily:"monospace", fontSize:36, fontWeight:700,
                   color:bucketColor(bucketize(currentLogprobConf)), lineHeight:1 }}
                   title={currentLogprobConf!==null ? `${(currentLogprobConf*100).toFixed(0)}%` : undefined}>
                   {bucketize(currentLogprobConf) ?? "—"}
                 </span>
-                <span style={{ fontFamily:"monospace", fontSize:10, color:bucketColor(bucketize(currentLogprobConf)) }}>
+                <span style={{ fontFamily:"monospace", fontSize:12, color:bucketColor(bucketize(currentLogprobConf)) }}>
                   {bucketLabel(bucketize(currentLogprobConf))}
                 </span>
               </div>
               <BucketBar bucket={bucketize(currentLogprobConf)} size="lg"/>
               <div style={{ marginTop:8, marginBottom:24 }}>
-                <span style={{ fontFamily:"monospace", fontSize:10, color:BORDER }}>
+                <span style={{ fontFamily:"monospace", fontSize:12, color:FAINT }}>
                   exp(avg logprob) over answer span
                 </span>
               </div>
 
-              <div style={{ fontSize:9, fontFamily:"monospace", color:MUTED,
+              <div style={{ fontSize:11, fontFamily:"monospace", color:MUTED,
                 letterSpacing:"0.13em", marginBottom:8 }}>CONFIDENCE TRACE</div>
               {selfHist.length < 1
-                ? <div style={{ fontFamily:"monospace", fontSize:11, color:BORDER }}>Accumulating data…</div>
+                ? <div style={{ fontFamily:"monospace", fontSize:13, color:FAINT }}>Accumulating data…</div>
                 : <>
                     <ConfidenceTrace selfHist={selfHist} logprobHist={logprobHist}/>
                     <div style={{ display:"flex", gap:14, marginTop:10 }}>
-                      {[["#ef4444","low"],["#f0a500","mid"],["#4ade80","high"]]
+                      {[["#dc2626","low"],["#b45309","mid"],["#16a34a","high"]]
                         .map(([c,l]) => (
                           <div key={l} style={{ display:"flex", alignItems:"center", gap:5 }}>
                             <div style={{ width:7, height:7, borderRadius:2, background:c }}/>
-                            <span style={{ fontFamily:"monospace", fontSize:9, color:MUTED }}>{l}</span>
+                            <span style={{ fontFamily:"monospace", fontSize:11, color:MUTED }}>{l}</span>
                           </div>
                         ))}
                     </div>
@@ -671,14 +686,14 @@ export default function HonestAgent() {
 
               {/* Source legend */}
               <div style={{ marginTop:24, paddingTop:16, borderTop:`1px solid ${BORDER}` }}>
-                <div style={{ fontSize:9, fontFamily:"monospace", color:MUTED,
+                <div style={{ fontSize:11, fontFamily:"monospace", color:MUTED,
                   letterSpacing:"0.13em", marginBottom:10 }}>SOURCE LEGEND</div>
-                {[["KB","#818cf8","Knowledge Base article"],
-                  ["TRAINING","#6b7a99","General training memory"],
-                  ["TOOLS","#f0a500","Live tool call"]].map(([s,c,d]) => (
+                {[["KB",ACCENT,"Knowledge Base article"],
+                  ["TRAINING",TRAINING_PURPLE,"General training memory"],
+                  ["TOOLS","#b45309","Live tool call"]].map(([s,c,d]) => (
                   <div key={s} style={{ display:"flex", alignItems:"center", gap:8, marginBottom:6 }}>
-                    <span style={{ fontFamily:"monospace", fontSize:10, color:c, minWidth:66 }}>◈ {s}</span>
-                    <span style={{ fontSize:11, color:MUTED }}>{d}</span>
+                    <span style={{ fontFamily:"monospace", fontSize:12, color:c, minWidth:66 }}>◈ {s}</span>
+                    <span style={{ fontSize:13, color:MUTED }}>{d}</span>
                   </div>
                 ))}
               </div>
@@ -690,7 +705,7 @@ export default function HonestAgent() {
             <div style={{ flex:1, overflowY:"auto", padding:"16px 20px",
               display:"flex", flexDirection:"column", gap:14 }}>
 
-              <div style={{ fontSize:9, fontFamily:"monospace", color:MUTED, letterSpacing:"0.13em" }}>
+              <div style={{ fontSize:11, fontFamily:"monospace", color:MUTED, letterSpacing:"0.13em" }}>
                 LOAD WIKIPEDIA ARTICLES
               </div>
 
@@ -700,11 +715,11 @@ export default function HonestAgent() {
                   onKeyDown={e => e.key==="Enter" && addArticle(wikiInput)}
                   placeholder="Article title (e.g. Wayne Gretzky)…"
                   style={{ flex:1, background:SURF, border:`1px solid ${BORDER}`, borderRadius:6,
-                    color:TEXT, padding:"8px 12px", fontSize:12, outline:"none" }}/>
+                    color:TEXT, padding:"8px 12px", fontSize:14, outline:"none" }}/>
                 <button onClick={() => addArticle(wikiInput)}
                   disabled={wikiLoading||!wikiInput.trim()}
-                  style={{ background:"#2d2050", border:"1px solid #818cf8", borderRadius:6,
-                    color:"#818cf8", padding:"8px 14px", fontSize:11, fontFamily:"monospace",
+                  style={{ background:ACCENT_BG, border:`1px solid ${ACCENT}`, borderRadius:6,
+                    color:ACCENT, padding:"8px 14px", fontSize:13, fontFamily:"monospace",
                     cursor: wikiLoading||!wikiInput.trim()?"not-allowed":"pointer",
                     opacity: wikiLoading||!wikiInput.trim()?0.5:1 }}>
                   {wikiLoading ? "…" : "Load"}
@@ -712,12 +727,12 @@ export default function HonestAgent() {
               </div>
 
               {wikiError && (
-                <div style={{ fontFamily:"monospace", fontSize:11, color:"#ef4444" }}>{wikiError}</div>
+                <div style={{ fontFamily:"monospace", fontSize:13, color:"#dc2626" }}>{wikiError}</div>
               )}
 
               {/* Suggestion chips */}
               <div>
-                <div style={{ fontSize:9, fontFamily:"monospace", color:BORDER,
+                <div style={{ fontSize:11, fontFamily:"monospace", color:FAINT,
                   letterSpacing:"0.1em", marginBottom:8 }}>SUGGESTED — HOCKEY</div>
                 <div style={{ display:"flex", flexWrap:"wrap", gap:6 }}>
                   {HOCKEY_CHIPS.map(s => {
@@ -725,10 +740,10 @@ export default function HonestAgent() {
                     return (
                       <button key={s} disabled={!!loaded||wikiLoading}
                         onClick={() => !loaded && addArticle(s)}
-                        style={{ background: loaded?"#1a2e1a":SURF,
-                          border:`1px solid ${loaded?"#4ade80":BORDER}`, borderRadius:20,
-                          color: loaded?"#4ade80":MUTED, padding:"4px 10px",
-                          fontSize:10, fontFamily:"monospace",
+                        style={{ background: loaded?"#e6f7ea":SURF,
+                          border:`1px solid ${loaded?"#16a34a":BORDER}`, borderRadius:20,
+                          color: loaded?"#16a34a":MUTED, padding:"4px 10px",
+                          fontSize:12, fontFamily:"monospace",
                           cursor: loaded?"default":"pointer" }}>
                         {loaded?"✓ ":""}{s}
                       </button>
@@ -740,25 +755,25 @@ export default function HonestAgent() {
               {/* Loaded articles */}
               {kb.length > 0 ? (
                 <div>
-                  <div style={{ fontSize:9, fontFamily:"monospace", color:BORDER,
+                  <div style={{ fontSize:11, fontFamily:"monospace", color:FAINT,
                     letterSpacing:"0.1em", marginBottom:8 }}>LOADED ({kb.length})</div>
                   {kb.map(a => (
                     <div key={a.title} style={{ background:SURF, border:`1px solid ${BORDER}`,
                       borderRadius:6, padding:"10px 12px", marginBottom:8 }}>
                       <div style={{ display:"flex", justifyContent:"space-between", alignItems:"flex-start" }}>
                         <div>
-                          <div style={{ fontFamily:"monospace", fontSize:11, color:"#818cf8", marginBottom:2 }}>
+                          <div style={{ fontFamily:"monospace", fontSize:13, color:ACCENT, marginBottom:2 }}>
                             {a.title}
                           </div>
-                          <div style={{ fontFamily:"monospace", fontSize:9, color:BORDER }}>
+                          <div style={{ fontFamily:"monospace", fontSize:11, color:FAINT }}>
                             {a.extract.length.toLocaleString()} chars · Wikipedia
                           </div>
                         </div>
                         <button onClick={() => setKb(prev => prev.filter(x => x.title!==a.title))}
                           style={{ background:"transparent", border:"none", color:MUTED,
-                            cursor:"pointer", fontSize:16, padding:"0 4px", lineHeight:1 }}>×</button>
+                            cursor:"pointer", fontSize:18, padding:"0 4px", lineHeight:1 }}>×</button>
                       </div>
-                      <div style={{ marginTop:8, fontSize:11, color:MUTED, lineHeight:1.5,
+                      <div style={{ marginTop:8, fontSize:13, color:MUTED, lineHeight:1.5,
                         display:"-webkit-box", WebkitLineClamp:3,
                         WebkitBoxOrient:"vertical", overflow:"hidden" }}>
                         {a.extract}
@@ -767,7 +782,7 @@ export default function HonestAgent() {
                   ))}
                 </div>
               ) : (
-                <div style={{ fontFamily:"monospace", fontSize:11, color:BORDER,
+                <div style={{ fontFamily:"monospace", fontSize:13, color:FAINT,
                   textAlign:"center", marginTop:16 }}>
                   No articles loaded yet. Click a chip above.
                 </div>
@@ -778,16 +793,16 @@ export default function HonestAgent() {
           {/* ── TOOLS tab ── */}
           {tab==="tools" && (
             <div style={{ flex:1, overflowY:"auto", padding:"16px 20px" }}>
-              <div style={{ fontSize:9, fontFamily:"monospace", color:MUTED,
+              <div style={{ fontSize:11, fontFamily:"monospace", color:MUTED,
                 letterSpacing:"0.13em", marginBottom:12 }}>TOOL CALLS</div>
               {toolLog.length === 0
-                ? <div style={{ fontFamily:"monospace", fontSize:11, color:BORDER }}>No tool calls yet.</div>
+                ? <div style={{ fontFamily:"monospace", fontSize:13, color:FAINT }}>No tool calls yet.</div>
                 : toolLog.map((t,i) => (
-                    <div key={i} style={{ marginBottom:16, borderLeft:"2px solid #f0a500", paddingLeft:10 }}>
-                      <div style={{ fontFamily:"monospace", fontSize:10, color:"#f0a500", marginBottom:4 }}>
+                    <div key={i} style={{ marginBottom:16, borderLeft:"2px solid #b45309", paddingLeft:10 }}>
+                      <div style={{ fontFamily:"monospace", fontSize:12, color:"#b45309", marginBottom:4 }}>
                         ⟶ {t.name}({Object.entries(t.input).map(([k,v]) => `${k}="${v}"`).join(", ")})
                       </div>
-                      <div style={{ fontFamily:"monospace", fontSize:10, color:MUTED,
+                      <div style={{ fontFamily:"monospace", fontSize:12, color:MUTED,
                         whiteSpace:"pre-wrap", lineHeight:1.5 }}>
                         {JSON.stringify(t.result, null, 2)}
                       </div>

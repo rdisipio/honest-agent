@@ -255,22 +255,51 @@ number-to-number.
 ### 3.7 Design tokens
 
 ```js
-BG     = "#1a1f2e"  // deep indigo background
-SURF   = "#242937"  // card / input surface
-BORDER = "#2e3547"  // borders and dividers
-TEXT   = "#ddd8cc"  // warm off-white body text
-MUTED  = "#6b7a99"  // secondary text, labels
+BG     = "#f2f6fb"  // ice-white background
+SURF   = "#ffffff"  // card / input surface (pure white, "on the ice")
+BORDER = "#d6dee8"  // borders and dividers
+TEXT   = "#182437"  // dark navy-black body text
+MUTED  = "#5b6b85"  // secondary text, labels
+CARD_TINT = "#eef3f9"  // PUCK's own message bubble — a hair bluer than pure white
 
-// Confidence colours, by bucket (bucketColor())
-red    = "#ef4444"  // LOW (deferring)
-amber  = "#f0a500"  // MID
-green  = "#4ade80"  // HIGH
+// A hockey rink, not a dark-mode dashboard: ice-white surfaces, rink-blue
+// accent, a red wordmark, and two literal "rink lines" on structural
+// dividers (a 2px RINK_RED under the header, like centre ice; a 2px
+// RINK_BLUE between the chat and internals panels, like the zone divider).
+ACCENT       = "#1e4d8c"  // KB badges, links, active tab underline
+ACCENT_BG    = "#dbe7f8"  // light chip background, paired with ACCENT
+WORDMARK_RED = "#c8102e"  // PUCK title only
+RINK_BLUE    = "#1e4d8c"  // panel-divider border (same value as ACCENT, named separately for intent)
+RINK_RED     = "#c8102e"  // header-bottom border (same value as WORDMARK_RED, named separately for intent)
+FAINT        = "#94a3b8"  // de-emphasized text that still needs to be read — see note below
+TRAINING_PURPLE = "#7c3aed"  // TRAINING source — see note below
+
+// Confidence colours, by bucket (bucketColor()) — deepened from the old
+// dark-theme values (#ef4444/#f0a500/#4ade80) for contrast on a white
+// background. Same semantics (LOW/MID/HIGH), same red/amber/green — amber
+// especially needed a much darker shade, since bright amber/yellow has poor
+// contrast on white regardless of theme.
+red    = "#dc2626"  // LOW (deferring)
+amber  = "#b45309"  // MID
+green  = "#16a34a"  // HIGH
 
 // Source badge colours
-indigo = "#818cf8"  // KB source
-amber  = "#f0a500"  // TOOLS source
-grey   = "#6b7a99"  // TRAINING source
+ACCENT          = "#1e4d8c"  // KB source
+amber           = "#b45309"  // TOOLS source
+TRAINING_PURPLE = "#7c3aed"  // TRAINING source (was MUTED's blue-grey — too close to ACCENT's blue at a glance)
 ```
+
+**Two contrast bugs fixed after the light-theme flip, both worth remembering:**
+- `BORDER` (`#d6dee8`) was being reused as a *text* colour in ~11 places (footer version tag,
+  empty-state hint, INTERVIEWER/PUCK labels, stat captions, tab section headers, placeholders).
+  That was fine on the old dark theme, where `BORDER` was dark enough to read as a faint label
+  against a darker `BG`/`SURF` — but as a hairline-divider colour on a white background, it's
+  now supposed to be barely visible, and text set in it was reading as nearly invisible. Added
+  `FAINT` as the dedicated de-emphasized-but-legible text colour and moved every `color:BORDER`
+  text usage to it; `BORDER` itself stays reserved for actual 1px dividers.
+- `TRAINING`'s source-badge colour was `MUTED`'s plain blue-grey, which read as barely
+  distinguishable from `ACCENT`'s blue (`KB`) in the SIGNAL tab's SOURCE LEGEND. Gave it its own
+  purple (`TRAINING_PURPLE`) instead.
 
 Typography: `system-ui, sans-serif` for body; `monospace` / `Courier New` for all instrument
 readout text (confidence numbers, labels, tool call logs, tab headers).
@@ -361,6 +390,18 @@ attempts, not discard the first one. Append-only also sidesteps needing to trunc
 that, and would only really make sense on the most recent question anyway (retrying an earlier
 one would leave the history's tool calls and later turns in an inconsistent state relative to
 what's now the "current" answer to that question).
+
+**Theme: from dark dashboard to a literal ice rink.** Went through two steps. First, a subtle
+Habs-inspired retint of the original dark theme (indigo accent → royal blue, one muted red on
+the wordmark) while keeping the dark neutrals. Then a full flip to a light theme — ice-white
+background and cards, dark navy text, plus two literal "rink lines": a 2px `RINK_RED` under the
+header (centre ice) and a 2px `RINK_BLUE` between the chat and internals panels (the zone
+divider). The confidence colours (`red`/`amber`/`green` in `bucketColor()`) had to be
+*deepened*, not just carried over, once the background flipped to white — the old dark-theme
+values (`#ef4444`/`#f0a500`/`#4ade80`) were tuned for contrast against `#141a2b`, and bright
+amber in particular reads poorly on white regardless of theme. Same semantics throughout
+(LOW/MID/HIGH still map to red/amber/green) — only the exact shades changed, for legibility, not
+meaning.
 
 ---
 
