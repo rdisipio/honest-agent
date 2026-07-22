@@ -80,7 +80,7 @@ HonestAgent                    ← default export, all state lives here
 ├── Header bar
 ├── Left panel (60%)
 │   ├── Message list           ← chatMsgs[], scrollable
-│   │   ├── User bubble
+│   │   ├── User bubble         ← ↻ retry button, re-asks via sendMessage(m.content)
 │   │   └── ARIA bubble        ← includes confidence bar + source badge
 │   └── Input bar
 └── Right panel (40%)
@@ -163,8 +163,17 @@ without crashing the turn:
 1. **Extract** — one `chatJSON` call: given the question and answer, name the single most
    checkable factual claim and the Wikipedia article title that would verify it.
 2. **Fetch** — uses `fetchWikipediaFull(title)` (full article body, not the KB loader's
-   intro-only `fetchWikipedia`). A missing article is a valid outcome
-   (`verdict: "UNVERIFIABLE"`), not an error path.
+   intro-only `fetchWikipedia`). A missing article is a valid outcome, verdict
+   `"NO_ARTICLE"` — deliberately distinct from a judged `UNVERIFIABLE` (step 3). A named,
+   specific entity with *no* Wikipedia article at all (observed live: the model cited "George
+   Vizzura of the New York Rangers" as the first NHL goalie to wear a mask — no such article
+   exists; the real answer is Jacques Plante, Montreal Canadiens, 1959) is stronger evidence of
+   fabrication than an article that exists but just doesn't happen to cover this particular
+   detail (e.g. the Bill Barilko case, where Barilko is real and has an article). Collapsing
+   both into one neutral "can't verify" bucket was throwing away a real signal — a specific
+   invented name is usually a giveaway a general model of the world isn't. Rendered in amber
+   with an explicit "possible fabrication" label, not the neutral grey used for a judged
+   `UNVERIFIABLE`.
 3. **Judge** — a second `chatJSON` call: given the claim and the fetched excerpt, return
    `SUPPORTED`, `CONTRADICTED`, or `UNVERIFIABLE` plus a one-sentence explanation.
 
@@ -175,9 +184,12 @@ stable key regardless. Patches the message's `factCheck` field through three sta
 `{status:"checking"}` immediately, then `{status:"done", verdict, claim, title, explanation}`
 (or `verdict:"ERROR"` on any exception) once the pipeline finishes.
 
-#### Agent loop (`sendMessage`)
-ReAct-style tool-use loop, up to 6 iterations, against the local backend (§8 "Local backend
-(Phase 2)"):
+#### Agent loop (`sendMessage(textOverride?)`)
+Takes an optional `textOverride` — when omitted, reads from the `input` field and clears it
+(normal Send button / Enter key path); when passed a string, uses that instead and leaves
+`input` untouched. This is what the retry button (below) uses to re-ask a past question
+without disturbing whatever the user is currently typing. ReAct-style tool-use loop, up to 6
+iterations, against the local backend (§8 "Local backend (Phase 2)"):
 1. POST to `VITE_API_URL` with `model`, a system message built from the dynamic prompt, `tools`
    (OpenAI function-calling shape), and full conversation history
 2. If `finish_reason === "tool_calls"`: extract `message.tool_calls`, execute each, append one
@@ -337,6 +349,17 @@ any model self-report (i.e., always) to fully close.
 **Interview format, not Q&A chatbot format:** The left panel labels speakers as INTERVIEWER /
 ARIA rather than USER / ASSISTANT to reinforce the article's framing: this is participant
 observation, not a product demo.
+
+**Retry appends, doesn't replace:** Clicking `↻ retry` on a question re-asks it as a brand new
+turn at the end of the conversation rather than regenerating the original answer in place.
+Chosen because local models show real run-to-run variance (documented throughout
+`TEST_QUESTIONS.md` — the same trick question has produced both confabulated and honestly-
+hedged answers across different runs), and the point of retrying is usually to compare
+attempts, not discard the first one. Append-only also sidesteps needing to truncate
+`apiHistory`/`chatMsgs` and re-derive `selfHist`/`logprobHist` — replace-in-place would need
+that, and would only really make sense on the most recent question anyway (retrying an earlier
+one would leave the history's tool calls and later turns in an inconsistent state relative to
+what's now the "current" answer to that question).
 
 ---
 

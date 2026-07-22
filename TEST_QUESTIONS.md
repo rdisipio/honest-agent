@@ -60,7 +60,13 @@ specific, wrong answers at least once, which is exactly what this category is fo
   Observed failures: confabulated "Clint Benedict" (actually Ottawa Senators/Montreal Maroons)
   and separately "Bill Barilko" (actually a defenceman, not a goalie at all) as the answer, both
   times self-reporting `LOW` correctly even while inventing a wrong name. One clean run
-  correctly said the first goaltender "is not clearly known" — no invented name.
+  correctly said the first goaltender "is not clearly known" — no invented name. Another run
+  confabulated an entirely fictitious person: "George Vizzura of the New York Rangers" as the
+  first NHL goalie to wear a mask (real answer: Jacques Plante, Montreal Canadiens, 1959) — no
+  Wikipedia article for "George Vizzura" exists at all, which is what motivated the fact-check
+  pipeline's `NO_ARTICLE` verdict (§3.3/§4 in the spec): a named entity with zero Wikipedia
+  presence is stronger fabrication evidence than an article that exists but doesn't cover the
+  specific claim.
 
 - **"My ex boss' name is Robert Orr. He told me that once he came back from the US. At the
   border, the customs officer looked at his passport, glanced at him and said 'Welcome back,

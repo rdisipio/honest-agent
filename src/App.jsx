@@ -275,8 +275,11 @@ export default function HonestAgent() {
       try {
         article = await fetchWikipediaFull(extraction.title);
       } catch {
-        patch({ status:"done", verdict:"UNVERIFIABLE", claim:extraction.claim, title:extraction.title,
-          explanation:`No Wikipedia article found for "${extraction.title}".` });
+        // Distinct from a judged UNVERIFIABLE: a named, specific entity with no
+        // Wikipedia article at all is stronger evidence of fabrication than an
+        // article that exists but doesn't happen to cover this particular detail.
+        patch({ status:"done", verdict:"NO_ARTICLE", claim:extraction.claim, title:extraction.title,
+          explanation:`No Wikipedia article exists for "${extraction.title}".` });
         return;
       }
 
@@ -315,10 +318,13 @@ export default function HonestAgent() {
   };
 
   // ── Main send/agent loop
-  const sendMessage = async () => {
-    const userText = input.trim();
+  // textOverride lets the retry button re-ask a past question without touching
+  // the input field — everything else about the turn behaves identically.
+  const sendMessage = async (textOverride) => {
+    const userText = (textOverride ?? input).trim();
     if (!userText || isThinking) return;
-    setInput(""); setIsThinking(true); setIsDeferring(false); setThinkLabel("Thinking…");
+    if (textOverride === undefined) setInput("");
+    setIsThinking(true); setIsDeferring(false); setThinkLabel("Thinking…");
     setChatMsgs(prev => [...prev, { role:"user", content:userText }]);
     let hist = [...apiHistory, { role:"user", content:userText }];
     const newTools = [];
@@ -445,8 +451,19 @@ export default function HonestAgent() {
             {chatMsgs.map((m,i) => (
               <div key={i} style={{ display:"flex", flexDirection:"column", gap:4,
                 alignItems: m.role==="user" ? "flex-end" : "flex-start" }}>
-                <div style={{ fontSize:9, fontFamily:"monospace", color:BORDER, letterSpacing:"0.12em" }}>
-                  {m.role==="user" ? "INTERVIEWER" : "ARIA"}
+                <div style={{ display:"flex", alignItems:"center", gap:8 }}>
+                  {m.role==="user" && (
+                    <button onClick={() => sendMessage(m.content)} disabled={isThinking}
+                      title="Re-ask this exact question as a new turn — the original stays put"
+                      style={{ background:"transparent", border:"none", padding:0,
+                        fontFamily:"monospace", fontSize:9, letterSpacing:"0.05em",
+                        color:isThinking?BORDER:MUTED, cursor:isThinking?"not-allowed":"pointer" }}>
+                      ↻ retry
+                    </button>
+                  )}
+                  <div style={{ fontSize:9, fontFamily:"monospace", color:BORDER, letterSpacing:"0.12em" }}>
+                    {m.role==="user" ? "INTERVIEWER" : "ARIA"}
+                  </div>
                 </div>
                 <div style={{
                   maxWidth:"88%", padding:"12px 16px", borderRadius:8, fontSize:14, lineHeight:1.7,
@@ -511,13 +528,19 @@ export default function HonestAgent() {
                         <>
                           <div style={{ color:
                             m.factCheck.verdict==="SUPPORTED" ? "#4ade80" :
-                            m.factCheck.verdict==="CONTRADICTED" ? "#ef4444" : MUTED }}>
+                            m.factCheck.verdict==="CONTRADICTED" ? "#ef4444" :
+                            m.factCheck.verdict==="NO_ARTICLE" ? "#f0a500" : MUTED }}>
                             {m.factCheck.verdict==="SUPPORTED" ? "✓ fact-check: supported" :
                              m.factCheck.verdict==="CONTRADICTED" ? `✗ fact-check: contradicted — ${m.factCheck.explanation}` :
+                             m.factCheck.verdict==="NO_ARTICLE" ? "⚠ fact-check: no Wikipedia article for this name — possible fabrication" :
                              `? fact-check: ${m.factCheck.explanation || "inconclusive"}`}
                           </div>
                           <div style={{ color:MUTED, marginTop:2 }}>
-                            {m.factCheck.title ? (
+                            {m.factCheck.verdict==="NO_ARTICLE" ? (
+                              <span title={m.factCheck.claim}>
+                                searched for "{m.factCheck.title}" on Wikipedia — no matching article exists
+                              </span>
+                            ) : m.factCheck.title ? (
                               <>
                                 checked against{" "}
                                 <a href={`https://en.wikipedia.org/wiki/${encodeURIComponent(m.factCheck.title.replace(/ /g,"_"))}`}
@@ -561,7 +584,7 @@ export default function HonestAgent() {
               style={{ flex:1, background:SURF, border:`1px solid ${BORDER}`, borderRadius:6,
                 color:TEXT, padding:"10px 14px", fontSize:14, outline:"none" }}
             />
-            <button onClick={sendMessage} disabled={isThinking||!input.trim()}
+            <button onClick={() => sendMessage()} disabled={isThinking||!input.trim()}
               style={{ background:isThinking||!input.trim()?SURF:"#2e3d5c",
                 border:`1px solid ${BORDER}`, borderRadius:6,
                 color:isThinking||!input.trim()?MUTED:TEXT,
