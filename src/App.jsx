@@ -39,9 +39,15 @@ Your epistemic rules:
 • Use get_weather or get_game_result for live data only.
 
 MANDATORY FORMAT — every response must end with these two tags on their own lines:
-[CONFIDENCE: X.XX]
+[CONFIDENCE: LOW|MID|HIGH]
 [SOURCE: KB|TRAINING|TOOLS]
 
+Do not report a precise numeric confidence — you cannot actually measure your own certainty
+that precisely, and a made-up decimal is more misleading than an honest bucket. Pick the bucket
+that best matches your actual epistemic state:
+CONFIDENCE key: HIGH = solidly grounded (clear KB match or well-established fact) · MID =
+plausible but not certain · LOW = significant uncertainty (guessing, stale, or out of scope) —
+LOW answers are treated as a deferral to the human interviewer.
 SOURCE key: KB = Knowledge Base · TRAINING = general training memory · TOOLS = live tool call${kbBlock}`;
 }
 
@@ -107,29 +113,57 @@ async function fetchWikipedia(title) {
   return { title: page.title, extract: page.extract.slice(0, 2800) };
 }
 
-// ── Sparkline SVG ────────────────────────────────────────────────────────────
-function Sparkline({ history, threshold }) {
-  if (history.length < 2) return null;
-  const W=240, H=52, P=8, w=W-P*2, h=H-P*2;
-  const pts = history.map((v,i) => ({ x: P + (i/(history.length-1))*w, y: P + (1-v)*h }));
-  const d   = pts.map((p,i) => `${i===0?"M":"L"}${p.x.toFixed(1)},${p.y.toFixed(1)}`).join(" ");
-  const ty  = P + (1-threshold)*h;
+// ── Confidence trace: dual-row bucket grid ───────────────────────────────────
+// A line chart implies interpolation between points, which is misleading for
+// discrete LOW/MID/HIGH buckets — a strip of coloured cells, one row per
+// signal, makes turn-by-turn agreement/divergence easy to scan instead.
+function ConfidenceTrace({ selfHist, logprobHist }) {
+  const n = Math.max(selfHist.length, logprobHist.length);
+  if (n < 1) return null;
+  const cell = (bucket, key) => (
+    <div key={key} title={bucket ?? "no data"} style={{ width:10, height:10, borderRadius:2,
+      background: bucket ? bucketColor(bucket) : "#2a3248" }}/>
+  );
+  const row = (label, hist) => (
+    <div style={{ display:"flex", alignItems:"center", gap:6 }}>
+      <span style={{ fontFamily:"monospace", fontSize:8, color:MUTED, minWidth:44 }}>{label}</span>
+      <div style={{ display:"flex", gap:3, flexWrap:"wrap" }}>
+        {Array.from({ length:n }, (_,i) => cell(hist[i], `${label}${i}`))}
+      </div>
+    </div>
+  );
   return (
-    <svg viewBox={`0 0 ${W} ${H}`} width="100%" height={H}>
-      <line x1={P} y1={ty} x2={W-P} y2={ty} stroke="#f0a500" strokeWidth="1" strokeDasharray="5,3" opacity="0.65"/>
-      <path d={d} fill="none" stroke="#4ade80" strokeWidth="1.5" strokeLinejoin="round"/>
-      {pts.map((p,i) => (
-        <circle key={i} cx={p.x} cy={p.y} r="2.5" fill={history[i]<threshold?"#ef4444":"#4ade80"}/>
-      ))}
-    </svg>
+    <div style={{ display:"flex", flexDirection:"column", gap:6 }}>
+      {row("self", selfHist)}
+      {row("logprob", logprobHist)}
+    </div>
   );
 }
 
-// ── Colour helpers ───────────────────────────────────────────────────────────
-const confColor = (c,t) => c==null?"#6b7a99": c<t?"#ef4444": c<0.65?"#f0a500":"#4ade80";
-const confLabel = (c,t) => c==null?"—": c<t?"Below threshold — deferring": c<0.5?"Low": c<0.7?"Moderate": c<0.87?"High":"Very high";
+// ── Confidence bucket helpers ────────────────────────────────────────────────
+// Turns a raw logprob confidence (0-1) into the same LOW/MID/HIGH vocabulary the
+// model uses for its self-report, so the two signals are directly comparable.
+const bucketize   = p => p==null ? null : p<0.4 ? "LOW" : p<0.65 ? "MID" : "HIGH";
+const bucketColor = b => b==null?"#6b7a99": b==="LOW"?"#ef4444": b==="MID"?"#f0a500":"#4ade80";
+const bucketLabel = b => b==null?"—": b==="LOW"?"Low — deferring": b==="MID"?"Moderate":"High";
 const srcColor  = s => s==="KB"?"#818cf8": s==="TOOLS"?"#f0a500":"#6b7a99";
 const srcBadge  = s => s==="KB"?"◈ KB": s==="TOOLS"?"⟶ Tools":"⊘ Training";
+const BUCKET_LEVEL = { LOW:1, MID:2, HIGH:3 };
+
+// Three segments filled up to the bucket level — a discrete indicator instead
+// of a continuous-width bar, since there's no meaningful "72% of the way" here.
+function BucketBar({ bucket, size="sm" }) {
+  const level = BUCKET_LEVEL[bucket] ?? 0;
+  const h = size==="lg" ? 6 : 3;
+  return (
+    <div style={{ display:"flex", gap:3, flex:1 }}>
+      {[1,2,3].map(i => (
+        <div key={i} style={{ flex:1, height:h, borderRadius:2,
+          background: i<=level ? bucketColor(bucket) : BORDER }}/>
+      ))}
+    </div>
+  );
+}
 
 // ── Design tokens ────────────────────────────────────────────────────────────
 const BG="#1a1f2e", SURF="#242937", BORDER="#2e3547", TEXT="#ddd8cc", MUTED="#6b7a99";
@@ -150,8 +184,8 @@ export default function HonestAgent() {
   const [thinkLabel,  setThinkLabel]  = useState("Thinking…");
   const [currentConf, setCurrentConf] = useState(null);
   const [currentLogprobConf, setCurrentLogprobConf] = useState(null);
-  const [confHist,    setConfHist]    = useState([]);
-  const [threshold,   setThreshold]   = useState(0.4);
+  const [selfHist,     setSelfHist]     = useState([]);
+  const [logprobHist,  setLogprobHist]  = useState([]);
   const [toolLog,     setToolLog]     = useState([]);
   const [isDeferring, setIsDeferring] = useState(false);
   const [tab,         setTab]         = useState("signal");
@@ -161,14 +195,6 @@ export default function HonestAgent() {
   const [wikiError,   setWikiError]   = useState(null);
   const chatRef = useRef(null);
   const inputRef= useRef(null);
-
-  // Recompute 15th-percentile threshold when history grows
-  useEffect(() => {
-    if (confHist.length >= 3) {
-      const s = [...confHist].sort((a,b) => a-b);
-      setThreshold(s[Math.max(0, Math.floor(0.15 * s.length))]);
-    }
-  }, [confHist]);
 
   useEffect(() => {
     chatRef.current?.scrollTo({ top: chatRef.current.scrollHeight, behavior:"smooth" });
@@ -244,26 +270,21 @@ export default function HonestAgent() {
     }
 
     const raw   = finalData.choices[0].message.content ?? "";
-    const confM = raw.match(/\[CONFIDENCE:\s*([\d.]+)\]/i);
+    const confM = raw.match(/\[CONFIDENCE:\s*(LOW|MID|HIGH)\]/i);
     const srcM  = raw.match(/\[SOURCE:\s*(KB|TRAINING|TOOLS)\]/i);
-    const conf  = confM ? Math.min(1, Math.max(0, parseFloat(confM[1]))) : null;
+    const conf  = confM ? confM[1].toUpperCase() : null;
     const src   = srcM  ? srcM[1].toUpperCase() : null;
     const clean = raw
       .replace(/\[CONFIDENCE:[^\]]+\]\s*/gi, "")
       .replace(/\[SOURCE:[^\]]+\]\s*/gi, "")
       .trim();
     const logprobConf = typeof finalData.logprob_confidence === "number" ? finalData.logprob_confidence : null;
+    const logprobBucket = bucketize(logprobConf);
+    const defer = conf === "LOW";
 
-    const newH = conf !== null ? [...confHist, conf] : confHist;
-    let newTh  = threshold;
-    if (newH.length >= 3) {
-      const s = [...newH].sort((a,b) => a-b);
-      newTh = s[Math.max(0, Math.floor(0.15 * s.length))];
-    }
-    const defer = conf !== null && conf < newTh;
-
-    if (conf !== null) setConfHist(newH);
-    setCurrentConf(conf); setCurrentLogprobConf(logprobConf); setThreshold(newTh); setIsDeferring(defer);
+    if (conf !== null) setSelfHist(prev => [...prev, conf]);
+    if (logprobBucket !== null) setLogprobHist(prev => [...prev, logprobBucket]);
+    setCurrentConf(conf); setCurrentLogprobConf(logprobConf); setIsDeferring(defer);
     setToolLog(prev => [...prev, ...newTools]);
     setApiHistory(hist);
     setChatMsgs(prev => [...prev, { role:"assistant", content:clean, confidence:conf, logprobConfidence:logprobConf, source:src, deferring:defer }]);
@@ -272,7 +293,7 @@ export default function HonestAgent() {
   };
 
   // ── Render helpers
-  const col     = confColor(currentConf, threshold);
+  const col     = bucketColor(currentConf);
   const tabBtn  = (id, label) => ({
     flex:1, background:"transparent", border:"none",
     borderBottom: tab===id ? "2px solid #818cf8" : "2px solid transparent",
@@ -336,22 +357,22 @@ export default function HonestAgent() {
                   {m.deferring && (
                     <div style={{ fontFamily:"monospace", fontSize:9, color:"#ef4444",
                       marginBottom:8, letterSpacing:"0.1em" }}>
-                      ⚠ DEFERRING TO HUMAN — confidence below threshold
+                      ⚠ DEFERRING TO HUMAN — self-reported confidence is LOW
                     </div>
                   )}
                   <div style={{ whiteSpace:"pre-wrap" }}>{m.content}</div>
                   {m.confidence != null && (
                     <div style={{ marginTop:10, paddingTop:8, borderTop:`1px solid ${BORDER}`,
                       display:"flex", alignItems:"center", gap:8 }}>
-                      <span style={{ fontFamily:"monospace", fontSize:11,
-                        color:confColor(m.confidence,threshold), minWidth:34 }}>
-                        {(m.confidence*100).toFixed(0)}%
+                      <span style={{ fontFamily:"monospace", fontSize:9, color:MUTED, minWidth:66 }}
+                        title="Verbalized confidence: the model's own self-reported [CONFIDENCE] tag.">
+                        self-report
                       </span>
-                      <div style={{ flex:1, height:3, background:BORDER, borderRadius:2 }}>
-                        <div style={{ width:`${m.confidence*100}%`, height:"100%",
-                          background:confColor(m.confidence,threshold),
-                          borderRadius:2, transition:"width 0.5s" }}/>
-                      </div>
+                      <span style={{ fontFamily:"monospace", fontSize:11,
+                        color:bucketColor(m.confidence), minWidth:34 }}>
+                        {m.confidence}
+                      </span>
+                      <BucketBar bucket={m.confidence}/>
                       {m.source && (
                         <span style={{ fontFamily:"monospace", fontSize:9,
                           color:srcColor(m.source), whiteSpace:"nowrap" }}>
@@ -360,27 +381,28 @@ export default function HonestAgent() {
                       )}
                     </div>
                   )}
-                  {m.logprobConfidence != null && (
-                    <div style={{ marginTop:6, display:"flex", alignItems:"center", gap:8 }}>
-                      <span style={{ fontFamily:"monospace", fontSize:9, color:MUTED, minWidth:34 }}>
-                        logprob
-                      </span>
-                      <span style={{ fontFamily:"monospace", fontSize:11,
-                        color:confColor(m.logprobConfidence,threshold), minWidth:34 }}>
-                        {(m.logprobConfidence*100).toFixed(0)}%
-                      </span>
-                      <div style={{ flex:1, height:3, background:BORDER, borderRadius:2 }}>
-                        <div style={{ width:`${m.logprobConfidence*100}%`, height:"100%",
-                          background:confColor(m.logprobConfidence,threshold),
-                          borderRadius:2, transition:"width 0.5s" }}/>
-                      </div>
-                      {m.confidence != null && Math.abs(m.confidence-m.logprobConfidence) > 0.2 && (
-                        <span style={{ fontFamily:"monospace", fontSize:9, color:"#f0a500", whiteSpace:"nowrap" }}>
-                          ⚠ diverges
+                  {m.logprobConfidence != null && (() => {
+                    const lb = bucketize(m.logprobConfidence);
+                    return (
+                      <div style={{ marginTop:6, display:"flex", alignItems:"center", gap:8 }}>
+                        <span style={{ fontFamily:"monospace", fontSize:9, color:MUTED, minWidth:66 }}
+                          title={`Logprob confidence: exp(avg token logprob) over the answer span (${(m.logprobConfidence*100).toFixed(0)}%), bucketed the same way as the self-report.`}>
+                          logprob
                         </span>
-                      )}
-                    </div>
-                  )}
+                        <span style={{ fontFamily:"monospace", fontSize:11,
+                          color:bucketColor(lb), minWidth:34 }}>
+                          {lb}
+                        </span>
+                        <BucketBar bucket={lb}/>
+                        {m.confidence != null && m.confidence !== lb && (
+                          <span style={{ fontFamily:"monospace", fontSize:9, color:"#f0a500", whiteSpace:"nowrap" }}
+                            title="The model's self-reported bucket and the logprob-derived bucket don't match.">
+                            ⚠ vs self-report
+                          </span>
+                        )}
+                      </div>
+                    );
+                  })()}
                 </div>
               </div>
             ))}
@@ -436,59 +458,52 @@ export default function HonestAgent() {
           {tab==="signal" && (
             <div style={{ flex:1, overflowY:"auto", padding:"18px 20px" }}>
               <div style={{ fontSize:9, fontFamily:"monospace", color:MUTED,
-                letterSpacing:"0.13em", marginBottom:12 }}>CONFIDENCE SIGNAL</div>
+                letterSpacing:"0.13em", marginBottom:12 }}>SELF-REPORTED CONFIDENCE</div>
 
               <div style={{ display:"flex", alignItems:"baseline", gap:10, marginBottom:10 }}>
-                <span style={{ fontFamily:"monospace", fontSize:38, fontWeight:700,
+                <span style={{ fontFamily:"monospace", fontSize:32, fontWeight:700,
                   color:col, lineHeight:1, transition:"color 0.4s" }}>
-                  {currentConf !== null ? `${(currentConf*100).toFixed(0)}%` : "—"}
+                  {currentConf ?? "—"}
                 </span>
                 <span style={{ fontFamily:"monospace", fontSize:10, color:col }}>
-                  {confLabel(currentConf,threshold)}
+                  {bucketLabel(currentConf)}
                 </span>
               </div>
-
-              <div style={{ height:5, background:BORDER, borderRadius:3, marginBottom:8, overflow:"hidden" }}>
-                <div style={{ width:`${(currentConf??0)*100}%`, height:"100%", background:col,
-                  borderRadius:3, transition:"width 0.6s ease, background 0.4s" }}/>
-              </div>
-              <div style={{ display:"flex", justifyContent:"space-between", marginBottom:24 }}>
+              <BucketBar bucket={currentConf} size="lg"/>
+              <div style={{ display:"flex", justifyContent:"space-between", marginTop:8, marginBottom:24 }}>
                 <span style={{ fontFamily:"monospace", fontSize:10, color:"#f0a500" }}>
-                  threshold {(threshold*100).toFixed(0)}%{confHist.length<3?" (default)":" (15th pct)"}
+                  auto-defer on LOW
                 </span>
-                <span style={{ fontFamily:"monospace", fontSize:10, color:BORDER }}>n={confHist.length}</span>
+                <span style={{ fontFamily:"monospace", fontSize:10, color:BORDER }}>n={selfHist.length}</span>
               </div>
 
               <div style={{ fontSize:9, fontFamily:"monospace", color:MUTED,
                 letterSpacing:"0.13em", marginBottom:8 }}>LOGPROB CONFIDENCE</div>
               <div style={{ display:"flex", alignItems:"baseline", gap:10, marginBottom:8 }}>
                 <span style={{ fontFamily:"monospace", fontSize:22, fontWeight:700,
-                  color:confColor(currentLogprobConf,threshold), lineHeight:1 }}>
-                  {currentLogprobConf !== null ? `${(currentLogprobConf*100).toFixed(0)}%` : "—"}
+                  color:bucketColor(bucketize(currentLogprobConf)), lineHeight:1 }}
+                  title={currentLogprobConf!==null ? `${(currentLogprobConf*100).toFixed(0)}%` : undefined}>
+                  {bucketize(currentLogprobConf) ?? "—"}
                 </span>
                 <span style={{ fontFamily:"monospace", fontSize:9, color:MUTED }}>
-                  exp(avg logprob) over answer span
+                  exp(avg logprob) over answer span, bucketed
                 </span>
               </div>
-              <div style={{ height:5, background:BORDER, borderRadius:3, marginBottom:24, overflow:"hidden" }}>
-                <div style={{ width:`${(currentLogprobConf??0)*100}%`, height:"100%",
-                  background:confColor(currentLogprobConf,threshold),
-                  borderRadius:3, transition:"width 0.6s ease, background 0.4s" }}/>
+              <div style={{ marginBottom:24 }}>
+                <BucketBar bucket={bucketize(currentLogprobConf)} size="lg"/>
               </div>
 
               <div style={{ fontSize:9, fontFamily:"monospace", color:MUTED,
                 letterSpacing:"0.13em", marginBottom:8 }}>CONFIDENCE TRACE</div>
-              {confHist.length < 2
+              {selfHist.length < 1
                 ? <div style={{ fontFamily:"monospace", fontSize:11, color:BORDER }}>Accumulating data…</div>
                 : <>
-                    <Sparkline history={confHist} threshold={threshold}/>
-                    <div style={{ display:"flex", gap:14, marginTop:6 }}>
-                      {[["#f0a500","threshold",true],["#ef4444","deferred",false],["#4ade80","answered",false]]
-                        .map(([c,l,dash]) => (
+                    <ConfidenceTrace selfHist={selfHist} logprobHist={logprobHist}/>
+                    <div style={{ display:"flex", gap:14, marginTop:10 }}>
+                      {[["#ef4444","low"],["#f0a500","mid"],["#4ade80","high"]]
+                        .map(([c,l]) => (
                           <div key={l} style={{ display:"flex", alignItems:"center", gap:5 }}>
-                            {dash
-                              ? <svg width="18" height="8"><line x1="0" y1="4" x2="18" y2="4" stroke={c} strokeWidth="1" strokeDasharray="4,3"/></svg>
-                              : <div style={{ width:7, height:7, borderRadius:"50%", background:c }}/>}
+                            <div style={{ width:7, height:7, borderRadius:2, background:c }}/>
                             <span style={{ fontFamily:"monospace", fontSize:9, color:MUTED }}>{l}</span>
                           </div>
                         ))}

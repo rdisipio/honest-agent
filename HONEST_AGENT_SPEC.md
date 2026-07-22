@@ -17,16 +17,19 @@ real time, and screenshot the results for the article.
 
 The project has two phases:
 
-- **Phase 1 (current):** A self-contained React single-file component running inside an
-  Anthropic Claude artifact. Uses verbalized confidence (model self-reports a `[CONFIDENCE: X.XX]`
-  tag). Runs entirely in the browser — no backend, no build step.
+- **Phase 1 (historical, superseded):** A self-contained React single-file component running
+  inside an Anthropic Claude artifact. Used verbalized confidence (model self-reports a
+  `[CONFIDENCE: X.XX]` tag). Ran entirely in the browser — no backend, no build step. No longer
+  how the code runs; kept here as historical record (see §8 for the API shape it used).
 - **Phase 2 (current):** A local FastAPI backend proxying to `llama-server` (llama.cpp), where
   actual per-token logprobs are accessible. This enables the logprob-based uncertainty
   quantification described in the referenced article (Transformer Lab / "Abstain from your own
-  doubt"). Phase 2 is the theoretically rigorous version; Phase 1 is the publishable demo.
-  llama.cpp was chosen over MLX-LM (the framework originally sketched here) because
+  doubt"). llama.cpp was chosen over MLX-LM (the framework originally sketched here) because
   `llama-server` runs identically on Mac/Linux/Windows — a reader of the article can reproduce
-  the demo on any machine, not just Apple Silicon.
+  the demo on any machine, not just Apple Silicon. The self-report format also moved on from
+  Phase 1's fabricated-looking `X.XX` float to an honest `LOW|MID|HIGH` bucket (see §3.6) —
+  the model can't actually measure its own certainty to two decimal places, so asking it to
+  wasn't any more rigorous than asking for a bucket, just falsely precise-looking.
 
 ---
 
@@ -37,7 +40,11 @@ The companion Medium article, titled **"The Honest Agent"**, covers:
 1. Why verbalized confidence alone is unreliable (the model can be confidently wrong)
 2. Logprob-based uncertainty as a more principled signal (averaging per-token log-probabilities
    over the answer span)
-3. The 15th-percentile threshold heuristic for auto-calibrating the abstention cutoff
+3. The 15th-percentile threshold heuristic for auto-calibrating the abstention cutoff — the demo
+   itself has since moved away from this (see §3.6): once self-report became a 3-value bucket
+   instead of a continuous float, a percentile-of-history threshold had little left to calibrate
+   against, so the demo now just defers on a LOW self-report directly. The article can still
+   discuss the percentile idea as a technique; it's no longer what the live demo does.
 4. Knowledge-grounded vs. training-memory answers as a natural experiment (this demo)
 5. The philosophical distinction between *checking oneself* before answering (live gating) vs.
    *distilled self-doubt* (the LoRA fine-tuning approach from the referenced article)
@@ -79,8 +86,9 @@ HonestAgent                    ← default export, all state lives here
 └── Right panel (40%)
     ├── Tab bar                ← SIGNAL | KNOWLEDGE | TOOLS
     ├── [tab=signal]
-    │   ├── Confidence meter   ← large %, colour-coded, animated bar
-    │   ├── Sparkline          ← SVG, separate component
+    │   ├── Self-reported confidence ← LOW|MID|HIGH, colour-coded, BucketBar
+    │   ├── Logprob confidence  ← same bucket vocabulary, derived from logprob_confidence
+    │   ├── ConfidenceTrace     ← dual-row bucket grid, self vs logprob per turn
     │   └── Source legend
     ├── [tab=knowledge]
     │   ├── Wikipedia input + Load button
@@ -97,7 +105,9 @@ Builds the system prompt dynamically from the current knowledge base. When `arti
 non-empty, appends each article's extracted text as a named section. Instructs ARIA to:
 - Draw confidently from the KB when relevant
 - Lower confidence and flag when falling back to training memory
-- Append `[CONFIDENCE: X.XX]` and `[SOURCE: KB|TRAINING|TOOLS]` on every response
+- Append `[CONFIDENCE: LOW|MID|HIGH]` and `[SOURCE: KB|TRAINING|TOOLS]` on every response —
+  explicitly told not to report a precise numeric confidence, since it can't actually measure
+  its own certainty that precisely
 
 #### `fetchWeather(location)`
 Two-step: geocode via Open-Meteo geocoding API → fetch current conditions from Open-Meteo
@@ -118,10 +128,17 @@ Calls the Wikipedia MediaWiki API (`action=query`, `prop=extracts`, `exintro=tru
 `explaintext=true`, `origin=*`). Extracts the intro section only, capped at 2800 characters.
 Throws on missing articles. Returns `{ title, extract }`.
 
-#### `Sparkline({ history, threshold })`
-Pure SVG component. Renders a line chart of confidence history with circular data points
-(green = above threshold, red = below) and a dashed amber threshold line. Uses a fixed
-viewBox `0 0 240 52` and scales to container width via `width="100%"`.
+#### `ConfidenceTrace({ selfHist, logprobHist })`
+Replaces the earlier SVG `Sparkline`. A line chart implies interpolation between points, which
+is misleading for discrete LOW/MID/HIGH values — instead renders two rows of small coloured
+cells (one row per turn-column), one row for the self-reported bucket history, one for the
+logprob-derived bucket history, so agreement/divergence between the two signals is visible at a
+glance per turn.
+
+#### `BucketBar({ bucket, size })`
+Three small segments filled up to the bucket's level (LOW=1, MID=2, HIGH=3), coloured via
+`bucketColor`. Replaces the old continuous-width percentage bar — there's no meaningful
+"72% of the way to confident" on a 3-value scale, so the bar shouldn't imply one.
 
 #### Agent loop (`sendMessage`)
 ReAct-style tool-use loop, up to 6 iterations, against the local backend (§8 "Local backend
@@ -143,46 +160,45 @@ ReAct-style tool-use loop, up to 6 iterations, against the local backend (§8 "L
 | `input` | `string` | Controlled input field |
 | `isThinking` | `boolean` | Disables input, shows thinking bubble |
 | `thinkLabel` | `string` | Text in thinking bubble ("Thinking…" / "Calling get_weather…") |
-| `currentConf` | `number\|null` | Verbalized confidence from last ARIA response (0–1) |
-| `currentLogprobConf` | `number\|null` | Logprob-derived confidence from last response (0–1), from the backend's `logprob_confidence` |
-| `confHist` | `number[]` | All confidence scores this session |
-| `threshold` | `number` | Current abstention threshold (default 0.4, then 15th pct) |
+| `currentConf` | `"LOW"\|"MID"\|"HIGH"\|null` | Self-reported confidence bucket from last ARIA response |
+| `currentLogprobConf` | `number\|null` | Raw logprob-derived confidence from last response (0–1), from the backend's `logprob_confidence` — bucketed for display via `bucketize()` |
+| `selfHist` | `("LOW"\|"MID"\|"HIGH")[]` | Self-reported bucket history this session, feeds `ConfidenceTrace` |
+| `logprobHist` | `("LOW"\|"MID"\|"HIGH")[]` | Logprob-derived bucket history this session (each raw value passed through `bucketize()` before storing) |
 | `toolLog` | `ToolCall[]` | Accumulated tool call records across all turns |
-| `isDeferring` | `boolean` | True when last response was below threshold |
+| `isDeferring` | `boolean` | True when last response's self-reported confidence was `"LOW"` |
 | `tab` | `"signal"\|"knowledge"\|"tools"` | Active right-panel tab |
 | `kb` | `Article[]` | Loaded Wikipedia articles `{title, extract}` |
 | `wikiInput` | `string` | Wikipedia article title input |
 | `wikiLoading` | `boolean` | Fetch in progress |
 | `wikiError` | `string\|null` | Last Wikipedia fetch error |
 
-### 3.5 Threshold calibration
+### 3.5 Deferral logic
 
-The threshold starts at `0.4` (hardcoded default). Once `confHist.length >= 3`, a `useEffect`
-recomputes it as the 15th percentile of the sorted history:
-
-```js
-const s = [...confHist].sort((a, b) => a - b);
-setThreshold(s[Math.max(0, Math.floor(0.15 * s.length))]);
-```
-
-This means the threshold adapts to the model's actual confidence distribution on the questions
-being asked, rather than being a fixed hyperparameter.
+There is no threshold to calibrate anymore. Deferral is direct: `const defer = conf === "LOW"`.
+This replaced the earlier 15th-percentile-of-history threshold (see §4 "15th percentile
+threshold, removed") once self-report became a 3-value bucket rather than a continuous float —
+with only three possible values, a percentile-of-history calculation had nothing meaningful
+left to calibrate against, and "defer on LOW" says the same thing more directly.
 
 ### 3.6 Response parsing
 
-After each completed agent turn, three regex passes run on the raw text:
+After each completed agent turn, two regex passes run on the raw text:
 
 ```js
-const confM = raw.match(/\[CONFIDENCE:\s*([\d.]+)\]/i);   // → number 0–1
-const srcM  = raw.match(/\[SOURCE:\s*(KB|TRAINING|TOOLS)\]/i); // → string
+const confM = raw.match(/\[CONFIDENCE:\s*(LOW|MID|HIGH)\]/i);   // → "LOW"|"MID"|"HIGH"
+const srcM  = raw.match(/\[SOURCE:\s*(KB|TRAINING|TOOLS)\]/i);  // → string
 const clean = raw
   .replace(/\[CONFIDENCE:[^\]]+\]\s*/gi, "")
   .replace(/\[SOURCE:[^\]]+\]\s*/gi, "")
   .trim();
 ```
 
-If either tag is absent (model non-compliance), `conf` and `src` fall back to `null` and the
-UI handles gracefully (no badge rendered, confidence meter stays at previous value).
+If either tag is absent (model non-compliance), `conf` and `src` fall back to `null` and the UI
+handles it gracefully — no self-report row rendered, `isDeferring` stays `false`. The backend's
+`logprob_confidence` (a raw 0–1 float, always present when llama-server returns logprobs) is
+separately passed through `bucketize()` — `p<0.4 ? "LOW" : p<0.65 ? "MID" : "HIGH"` — so the two
+signals share the same three-value vocabulary and can be compared bucket-to-bucket rather than
+number-to-number.
 
 ### 3.7 Design tokens
 
@@ -193,10 +209,10 @@ BORDER = "#2e3547"  // borders and dividers
 TEXT   = "#ddd8cc"  // warm off-white body text
 MUTED  = "#6b7a99"  // secondary text, labels
 
-// Confidence colours (threshold-relative)
-red    = "#ef4444"  // below threshold (deferring)
-amber  = "#f0a500"  // low-moderate (0.4–0.65)
-green  = "#4ade80"  // high confidence (>0.65)
+// Confidence colours, by bucket (bucketColor())
+red    = "#ef4444"  // LOW (deferring)
+amber  = "#f0a500"  // MID
+green  = "#4ade80"  // HIGH
 
 // Source badge colours
 indigo = "#818cf8"  // KB source
@@ -216,14 +232,24 @@ logprobs. Verbalized confidence (asking the model to self-report) is epistemolog
 but sufficient for a publishable demo and for illustrating the concept to a non-technical
 audience. The article acknowledges this limitation explicitly.
 
-**15th percentile threshold:** Chosen to match the spirit of the Transformer Lab reference
-(which relabels the bottom ~50% in their training experiment, but the demo uses a lighter
-touch). The percentile approach means the threshold is always relative to the model's actual
-distribution on this session's questions, not a hand-tuned constant.
+**15th percentile threshold, removed:** Originally chosen to match the spirit of the
+Transformer Lab reference (which relabels the bottom ~50% in their training experiment). Worked
+fine while self-report was a continuous float, but once it became a 3-value LOW/MID/HIGH
+bucket, a percentile-of-history threshold had almost nothing left to calibrate — with few
+distinct values, the "15th percentile" mostly just resolves to whichever bucket is least
+common. Replaced with direct `defer on LOW`, which says the same thing without the machinery.
 
-**`[CONFIDENCE: X.XX]` + `[SOURCE: KB|TRAINING|TOOLS]` tag format:** Simple regex parseable,
-unambiguous, easy to strip for display. Considered JSON-structured output but structured output
-mode conflicts with tool use in the Anthropic API.
+**`[CONFIDENCE: LOW|MID|HIGH]` bucket format, not a float:** Originally `[CONFIDENCE: X.XX]` —
+switched because the two-decimal float was fake precision: the model can't actually measure its
+own certainty to the hundredth, it's just typing a plausible-looking number the same way it
+types any other token. A bucket doesn't pretend to a precision that doesn't exist. The logprob
+signal is bucketed the same way (`bucketize()`, §3.6) so the two are directly comparable rather
+than requiring an arbitrary "diverges if |a-b| > 0.2" cutoff.
+
+**`[SOURCE: KB|TRAINING|TOOLS]` tag format:** Simple regex parseable, unambiguous, easy to
+strip for display. Considered JSON-structured output but structured output mode conflicts with
+tool use in the Anthropic API (a Phase 1 constraint; kept the tag format in Phase 2 for
+consistency even though it no longer applies).
 
 **Single-file React component:** Keeps the demo portable (copy-pasteable into any Claude
 artifact session). The cost is no module separation; acceptable for a demo.
@@ -272,12 +298,16 @@ observation, not a product demo.
 Tasks are grouped by phase and rough effort. A coding AI assistant should tackle these
 in roughly this order. Each task is independent unless noted.
 
-### 6.1 Phase 1 improvements (React artifact, no backend)
+### 6.1 Frontend feature backlog
 
-**P1-1 — Session persistence (localStorage workaround)**
-The artifact iframe doesn't support localStorage. Use the artifact's `window.storage` API
-instead (`window.storage.set(key, value)` / `window.storage.get(key)`). Persist: `kb` (loaded
-articles), `confHist`, `threshold`, and `chatMsgs`. Load on mount. Add a "Clear session" button.
+Originally scoped as "Phase 1, React artifact, no backend" items — that constraint is gone
+(§1), but the feature ideas below are still frontend-only work, independent of the backend.
+
+**P1-1 — Session persistence**
+Originally sketched around the Claude artifact's `window.storage` API (no real `localStorage`
+in that sandbox) — no longer a constraint now that this is a normal Vite app, so just use
+`localStorage` directly. Persist: `kb` (loaded articles), `selfHist`, `logprobHist`, and
+`chatMsgs`. Load on mount. Add a "Clear session" button.
 
 **P1-2 — Export conversation to Markdown**
 Add an "Export" button that formats `chatMsgs` as a Markdown document with speaker labels,
@@ -285,9 +315,10 @@ confidence scores, source badges, and timestamps. Use `Blob` + `URL.createObject
 a browser download. This lets the author paste the interview directly into the article draft.
 
 **P1-3 — Confidence calibration chart**
-Add a fourth tab `ANALYSIS` (right panel). Show a scatter plot (recharts `ScatterChart`) of
-question index vs. confidence, coloured by source (KB / TRAINING / TOOLS). Include a histogram
-of confidence values with the threshold marked. This gives the author a visual for the article.
+Add a fourth tab `ANALYSIS` (right panel). Show a scatter/strip plot of question index vs.
+self-report bucket, coloured by source (KB / TRAINING / TOOLS), plus a simple bar chart of
+LOW/MID/HIGH counts for both `selfHist` and `logprobHist` side by side. This gives the author a
+visual for the article beyond what the compact `ConfidenceTrace` grid in the SIGNAL tab shows.
 
 **P1-4 — Two-stage confidence filter (cheap pre-screen)**
 Before the full agent call, run a lightweight pre-screening prompt: send only the user question
@@ -314,11 +345,11 @@ search API (`action=opensearch`, returns top 5 matching titles), show a small dr
 matches, let the user confirm, then fetch the chosen article. This removes the pain of getting
 exact Wikipedia titles.
 
-**P1-8 — Confidence threshold manual override**
-Add a slider in the SIGNAL tab below the automatic threshold display. Let the user drag it
-to override the 15th-percentile calculation. Show both values (auto-computed and manual) and
-which one is currently active. Useful for the article to demonstrate the threshold effect
-at different cutoffs.
+**P1-8 — Confidence threshold manual override — obsolete**
+No longer applicable: there's no computed threshold left to override (§3.5, §4 "15th percentile
+threshold, removed"). Deferral is just `self-report === "LOW"`. If a manual-override idea is
+still wanted, the closer equivalent would be letting the user pick which bucket(s) trigger
+deferral (e.g. defer on LOW+MID too) rather than overriding a numeric cutoff.
 
 ### 6.2 Phase 2 — Local backend (llama.cpp) — DONE
 
@@ -347,12 +378,13 @@ computes `avg_logprob = mean(entry.logprob for entry in content)`, and attaches
 `logprob_confidence = min(1.0, exp(avg_logprob))` to the response. `null` if the upstream
 response has no logprobs (e.g. some builds omit them during constrained tool-call decoding).
 
-**P2-3 — Logprob vs. verbalized confidence comparison — done (lighter form)**
-Rather than a dedicated split-view panel, each ARIA message bubble shows a second row below
-the verbalized confidence bar — `logprob NN%` — with a `⚠ diverges` flag when the two signals
-differ by more than 0.2. The SIGNAL tab also gained a `LOGPROB CONFIDENCE` stat block below the
-existing meter. A dedicated comparison chart (second sparkline, scatter of both signals per
-question) is still open — see "Not yet built" below.
+**P2-3 — Logprob vs. verbalized confidence comparison — done**
+Each ARIA message bubble shows a second row below the self-report row — `logprob LOW|MID|HIGH`
+(via `bucketize()`) — with a `⚠ vs self-report` flag whenever the two buckets don't match. The
+SIGNAL tab has a `LOGPROB CONFIDENCE` stat block below the self-report one, and the
+`ConfidenceTrace` dual-row grid (§3.3) plots both bucket histories turn-by-turn, so agreement/
+divergence patterns across a whole session are visible at a glance — this ended up covering
+what the originally-sketched "dedicated comparison chart" was for.
 
 **P2-4 — LoRA fine-tuning pipeline (optional, advanced) — not started**
 Implement the Transformer Lab training approach locally:
@@ -368,10 +400,6 @@ during training — a different epistemological approach than live logprob gatin
 Phase 2 inference moved to llama.cpp, this step would still need `mlx-lm` (or another
 training-capable framework) installed separately just for fine-tuning — llama.cpp is
 inference-only. Unrelated to the logprob-confidence work; still open.
-
-**Not yet built (fast-follows):**
-- A dedicated logprob-vs-verbalized comparison view (second sparkline or scatter plot) — the
-  inline bubble row + SIGNAL stat cover the same information without it for now.
 
 ---
 
