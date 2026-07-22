@@ -1,5 +1,10 @@
 import { useState, useEffect, useRef } from "react";
 
+// This ran as a Claude.ai artifact originally, where requests to
+// api.anthropic.com are proxied automatically. Outside that sandbox this
+// needs a real backend to talk to — point it at your local model server.
+const API_URL = import.meta.env.VITE_API_URL || "http://localhost:8787/v1/messages";
+
 // ── WMO weather codes ────────────────────────────────────────────────────────
 const WMO = {
   0:"Clear sky",1:"Mainly clear",2:"Partly cloudy",3:"Overcast",
@@ -181,7 +186,7 @@ export default function HonestAgent() {
     for (let iter = 0; iter < 6; iter++) {
       let data;
       try {
-        const res = await fetch("https://api.anthropic.com/v1/messages", {
+        const res = await fetch(API_URL, {
           method:"POST", headers:{"Content-Type":"application/json"},
           body: JSON.stringify({ model:"claude-sonnet-4-6", max_tokens:1000,
             system: buildSystemPrompt(kb), tools: TOOLS_DEF, messages: hist })
