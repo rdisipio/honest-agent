@@ -1,9 +1,8 @@
 import { useState, useEffect, useRef } from "react";
 
-// This ran as a Claude.ai artifact originally, where requests to
-// api.anthropic.com are proxied automatically. Outside that sandbox this
-// needs a real backend to talk to — point it at your local model server.
-const API_URL = import.meta.env.VITE_API_URL || "http://localhost:8787/v1/messages";
+// Local backend, OpenAI-chat-completions-shaped (see backend/README.md).
+const API_URL    = import.meta.env.VITE_API_URL || "http://localhost:8787/v1/chat/completions";
+const MODEL_NAME  = import.meta.env.VITE_MODEL   || "local-model";
 
 // ── WMO weather codes ────────────────────────────────────────────────────────
 const WMO = {
@@ -114,10 +113,10 @@ const srcBadge  = s => s==="KB"?"◈ KB": s==="TOOLS"?"⟶ Tools":"⊘ Training"
 const BG="#1a1f2e", SURF="#242937", BORDER="#2e3547", TEXT="#ddd8cc", MUTED="#6b7a99";
 
 const TOOLS_DEF = [
-  { name:"get_weather", description:"Get live weather for a city.",
-    input_schema:{ type:"object", properties:{ location:{type:"string"} }, required:["location"] }},
-  { name:"get_traffic", description:"Get current traffic conditions between two places.",
-    input_schema:{ type:"object", properties:{ from:{type:"string"}, to:{type:"string"} }, required:["from","to"] }}
+  { type:"function", function:{ name:"get_weather", description:"Get live weather for a city.",
+    parameters:{ type:"object", properties:{ location:{type:"string"} }, required:["location"] }}},
+  { type:"function", function:{ name:"get_traffic", description:"Get current traffic conditions between two places.",
+    parameters:{ type:"object", properties:{ from:{type:"string"}, to:{type:"string"} }, required:["from","to"] }}}
 ];
 
 // ── Main component ───────────────────────────────────────────────────────────
@@ -128,6 +127,7 @@ export default function HonestAgent() {
   const [isThinking,  setIsThinking]  = useState(false);
   const [thinkLabel,  setThinkLabel]  = useState("Thinking…");
   const [currentConf, setCurrentConf] = useState(null);
+  const [currentLogprobConf, setCurrentLogprobConf] = useState(null);
   const [confHist,    setConfHist]    = useState([]);
   const [threshold,   setThreshold]   = useState(0.4);
   const [toolLog,     setToolLog]     = useState([]);
@@ -188,8 +188,9 @@ export default function HonestAgent() {
       try {
         const res = await fetch(API_URL, {
           method:"POST", headers:{"Content-Type":"application/json"},
-          body: JSON.stringify({ model:"claude-sonnet-4-6", max_tokens:1000,
-            system: buildSystemPrompt(kb), tools: TOOLS_DEF, messages: hist })
+          body: JSON.stringify({ model:MODEL_NAME, max_tokens:1000,
+            messages: [{ role:"system", content:buildSystemPrompt(kb) }, ...hist],
+            tools: TOOLS_DEF })
         });
         data = await res.json();
       } catch(e) {
@@ -197,22 +198,20 @@ export default function HonestAgent() {
         setIsThinking(false); return;
       }
 
-      if (data.stop_reason === "tool_use") {
-        hist = [...hist, { role:"assistant", content:data.content }];
-        const results = [];
-        for (const block of data.content) {
-          if (block.type === "tool_use") {
-            setThinkLabel(`Calling ${block.name}…`);
-            const result = await executeTool(block.name, block.input);
-            newTools.push({ name:block.name, input:block.input, result });
-            results.push({ type:"tool_result", tool_use_id:block.id, content:JSON.stringify(result) });
-          }
+      const choice = data.choices?.[0];
+      if (choice?.finish_reason === "tool_calls") {
+        hist = [...hist, choice.message];
+        for (const call of choice.message.tool_calls ?? []) {
+          const input = JSON.parse(call.function.arguments);
+          setThinkLabel(`Calling ${call.function.name}…`);
+          const result = await executeTool(call.function.name, input);
+          newTools.push({ name:call.function.name, input, result });
+          hist.push({ role:"tool", tool_call_id:call.id, content:JSON.stringify(result) });
         }
-        hist = [...hist, { role:"user", content:results }];
         setThinkLabel("Thinking…");
       } else {
         finalData = data;
-        hist = [...hist, { role:"assistant", content:data.content }];
+        hist = [...hist, choice.message];
         break;
       }
     }
@@ -222,7 +221,7 @@ export default function HonestAgent() {
       setIsThinking(false); return;
     }
 
-    const raw   = finalData.content.find(b => b.type==="text")?.text ?? "";
+    const raw   = finalData.choices[0].message.content ?? "";
     const confM = raw.match(/\[CONFIDENCE:\s*([\d.]+)\]/i);
     const srcM  = raw.match(/\[SOURCE:\s*(KB|TRAINING|TOOLS)\]/i);
     const conf  = confM ? Math.min(1, Math.max(0, parseFloat(confM[1]))) : null;
@@ -231,6 +230,7 @@ export default function HonestAgent() {
       .replace(/\[CONFIDENCE:[^\]]+\]\s*/gi, "")
       .replace(/\[SOURCE:[^\]]+\]\s*/gi, "")
       .trim();
+    const logprobConf = typeof finalData.logprob_confidence === "number" ? finalData.logprob_confidence : null;
 
     const newH = conf !== null ? [...confHist, conf] : confHist;
     let newTh  = threshold;
@@ -241,10 +241,10 @@ export default function HonestAgent() {
     const defer = conf !== null && conf < newTh;
 
     if (conf !== null) setConfHist(newH);
-    setCurrentConf(conf); setThreshold(newTh); setIsDeferring(defer);
+    setCurrentConf(conf); setCurrentLogprobConf(logprobConf); setThreshold(newTh); setIsDeferring(defer);
     setToolLog(prev => [...prev, ...newTools]);
     setApiHistory(hist);
-    setChatMsgs(prev => [...prev, { role:"assistant", content:clean, confidence:conf, source:src, deferring:defer }]);
+    setChatMsgs(prev => [...prev, { role:"assistant", content:clean, confidence:conf, logprobConfidence:logprobConf, source:src, deferring:defer }]);
     setIsThinking(false);
     inputRef.current?.focus();
   };
@@ -338,6 +338,27 @@ export default function HonestAgent() {
                       )}
                     </div>
                   )}
+                  {m.logprobConfidence != null && (
+                    <div style={{ marginTop:6, display:"flex", alignItems:"center", gap:8 }}>
+                      <span style={{ fontFamily:"monospace", fontSize:9, color:MUTED, minWidth:34 }}>
+                        logprob
+                      </span>
+                      <span style={{ fontFamily:"monospace", fontSize:11,
+                        color:confColor(m.logprobConfidence,threshold), minWidth:34 }}>
+                        {(m.logprobConfidence*100).toFixed(0)}%
+                      </span>
+                      <div style={{ flex:1, height:3, background:BORDER, borderRadius:2 }}>
+                        <div style={{ width:`${m.logprobConfidence*100}%`, height:"100%",
+                          background:confColor(m.logprobConfidence,threshold),
+                          borderRadius:2, transition:"width 0.5s" }}/>
+                      </div>
+                      {m.confidence != null && Math.abs(m.confidence-m.logprobConfidence) > 0.2 && (
+                        <span style={{ fontFamily:"monospace", fontSize:9, color:"#f0a500", whiteSpace:"nowrap" }}>
+                          ⚠ diverges
+                        </span>
+                      )}
+                    </div>
+                  )}
                 </div>
               </div>
             ))}
@@ -414,6 +435,23 @@ export default function HonestAgent() {
                   threshold {(threshold*100).toFixed(0)}%{confHist.length<3?" (default)":" (15th pct)"}
                 </span>
                 <span style={{ fontFamily:"monospace", fontSize:10, color:BORDER }}>n={confHist.length}</span>
+              </div>
+
+              <div style={{ fontSize:9, fontFamily:"monospace", color:MUTED,
+                letterSpacing:"0.13em", marginBottom:8 }}>LOGPROB CONFIDENCE</div>
+              <div style={{ display:"flex", alignItems:"baseline", gap:10, marginBottom:8 }}>
+                <span style={{ fontFamily:"monospace", fontSize:22, fontWeight:700,
+                  color:confColor(currentLogprobConf,threshold), lineHeight:1 }}>
+                  {currentLogprobConf !== null ? `${(currentLogprobConf*100).toFixed(0)}%` : "—"}
+                </span>
+                <span style={{ fontFamily:"monospace", fontSize:9, color:MUTED }}>
+                  exp(avg logprob) over answer span
+                </span>
+              </div>
+              <div style={{ height:5, background:BORDER, borderRadius:3, marginBottom:24, overflow:"hidden" }}>
+                <div style={{ width:`${(currentLogprobConf??0)*100}%`, height:"100%",
+                  background:confColor(currentLogprobConf,threshold),
+                  borderRadius:3, transition:"width 0.6s ease, background 0.4s" }}/>
               </div>
 
               <div style={{ fontSize:9, fontFamily:"monospace", color:MUTED,

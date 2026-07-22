@@ -20,10 +20,13 @@ The project has two phases:
 - **Phase 1 (current):** A self-contained React single-file component running inside an
   Anthropic Claude artifact. Uses verbalized confidence (model self-reports a `[CONFIDENCE: X.XX]`
   tag). Runs entirely in the browser — no backend, no build step.
-- **Phase 2 (planned):** A local Python stack on an M4 MacBook using MLX-LM or Ollama, where
+- **Phase 2 (current):** A local FastAPI backend proxying to `llama-server` (llama.cpp), where
   actual per-token logprobs are accessible. This enables the logprob-based uncertainty
   quantification described in the referenced article (Transformer Lab / "Abstain from your own
   doubt"). Phase 2 is the theoretically rigorous version; Phase 1 is the publishable demo.
+  llama.cpp was chosen over MLX-LM (the framework originally sketched here) because
+  `llama-server` runs identically on Mac/Linux/Windows — a reader of the article can reproduce
+  the demo on any machine, not just Apple Silicon.
 
 ---
 
@@ -54,13 +57,14 @@ sure", LoRA fine-tune on the mix, no ground-truth labels required.
 
 ### 3.1 File
 
-`honest-agent-v2.jsx` — single React component, ~565 lines, no external dependencies beyond
-what is available in the Claude artifact runtime.
+`src/App.jsx` — single React component (moved here from the original `honest-agent-v2.jsx`
+when the project moved off the Claude artifact runtime and onto a local Vite dev server; see
+§6.2/§8). Still a single file, no component split yet.
 
-**Available libraries in the artifact runtime:**
-`react`, `recharts`, `lucide-react`, `lodash`, `d3`, `mathjs`, `papaparse`, `xlsx`, `tone`,
-`three`, `tailwindcss` (base utilities only, no compiler). Do **not** use `localStorage` or
-`sessionStorage` — they are not supported in the artifact iframe.
+The "available libraries in the artifact runtime" constraint (no `recharts`/`lucide-react`/
+`localStorage` etc.) no longer applies — this runs as a normal npm-installed React app now, not
+inside a Claude artifact iframe. `localStorage` works fine here if session persistence (P1-1) is
+ever implemented.
 
 ### 3.2 Component tree
 
@@ -116,24 +120,27 @@ Pure SVG component. Renders a line chart of confidence history with circular dat
 viewBox `0 0 240 52` and scales to container width via `width="100%"`.
 
 #### Agent loop (`sendMessage`)
-ReAct-style tool-use loop, up to 6 iterations:
-1. POST to `https://api.anthropic.com/v1/messages` with model `claude-sonnet-4-6`, dynamic
-   system prompt, `TOOLS_DEF`, and full conversation history
-2. If `stop_reason === "tool_use"`: extract tool call blocks, execute each, append results as
-   `tool_result` content, continue loop
-3. If `stop_reason === "end_turn"`: extract text, parse confidence and source tags with regex,
-   strip tags from display text, update all state
+ReAct-style tool-use loop, up to 6 iterations, against the local backend (§8 "Local backend
+(Phase 2)"):
+1. POST to `VITE_API_URL` with `model`, a system message built from the dynamic prompt, `tools`
+   (OpenAI function-calling shape), and full conversation history
+2. If `finish_reason === "tool_calls"`: extract `message.tool_calls`, execute each, append one
+   `{role:"tool", tool_call_id, content}` message per result, continue loop
+3. If `finish_reason === "stop"`: extract `message.content`, parse confidence and source tags
+   with regex, strip tags from display text, read the backend's `logprob_confidence` field,
+   update all state
 
 ### 3.4 State inventory
 
 | State variable | Type | Purpose |
 |---|---|---|
 | `chatMsgs` | `Message[]` | Display-side conversation (user + assistant bubbles) |
-| `apiHistory` | `ApiMessage[]` | Full Anthropic API message history (includes tool blocks) |
+| `apiHistory` | `ApiMessage[]` | Full chat-completions message history (includes tool_calls/tool messages) |
 | `input` | `string` | Controlled input field |
 | `isThinking` | `boolean` | Disables input, shows thinking bubble |
 | `thinkLabel` | `string` | Text in thinking bubble ("Thinking…" / "Calling get_weather…") |
-| `currentConf` | `number\|null` | Confidence from last ARIA response (0–1) |
+| `currentConf` | `number\|null` | Verbalized confidence from last ARIA response (0–1) |
+| `currentLogprobConf` | `number\|null` | Logprob-derived confidence from last response (0–1), from the backend's `logprob_confidence` |
 | `confHist` | `number[]` | All confidence scores this session |
 | `threshold` | `number` | Current abstention threshold (default 0.4, then 15th pct) |
 | `toolLog` | `ToolCall[]` | Accumulated tool call records across all turns |
@@ -305,44 +312,41 @@ to override the 15th-percentile calculation. Show both values (auto-computed and
 which one is currently active. Useful for the article to demonstrate the threshold effect
 at different cutoffs.
 
-### 6.2 Phase 2 — Local Python stack (M4 MacBook)
+### 6.2 Phase 2 — Local backend (llama.cpp) — DONE
 
 The goal of Phase 2 is to replace verbalized confidence with actual per-token logprobs,
 enabling the logprob-based threshold approach described in the article.
 
-**Recommended local stack:**
-- Model inference: `mlx-lm` (Apple's MLX framework, native Apple Silicon)
-  - Install: `pip install mlx-lm`
-  - Models: `mlx-community/Qwen2.5-7B-Instruct-4bit` or `mlx-community/Llama-3.1-8B-Instruct-4bit`
-  - Logprobs: available via `mlx_lm.utils.stream_generate` (yields `GenerationResponse` with
-    `.logprobs` field per token)
-- Backend: FastAPI (`pip install fastapi uvicorn`)
-- Frontend: keep the React component but point API calls at `http://localhost:8000`
-  instead of `https://api.anthropic.com/v1/messages`
+**Actual local stack:**
+- Model inference: `llama-server` (llama.cpp), started separately by whoever runs the demo —
+  not managed by this repo. Metal-accelerated via `-ngl 99` on Apple Silicon, but the same
+  binary runs on Linux/Windows too. Tool calling requires `--jinja`.
+  Recommended model: `Qwen2.5-7B-Instruct-Q4_K_M.gguf`.
+- Backend: FastAPI proxy in `backend/` (`main.py`, `logprobs.py`) — forwards chat completions
+  to `llama-server` almost verbatim, always requesting `logprobs`/`top_logprobs`.
+- Frontend: `src/App.jsx` now speaks OpenAI-chat-completions shape directly (no more
+  Anthropic-Messages mimicry) — see §8 "Local backend (Phase 2)" below.
 
-**P2-1 — FastAPI backend with MLX-LM**
-Create `backend/main.py`. Implement:
-```
-POST /v1/generate       → runs mlx_lm.generate, returns text + logprobs
-POST /v1/tools/weather  → wraps fetchWeather logic in Python (httpx)
-POST /v1/tools/traffic  → mock or real
-```
-The `/v1/generate` endpoint should accept `{ prompt, max_tokens, temperature }` and return
-`{ text, tokens: [{token, logprob}] }`.
+**P2-1 — FastAPI backend proxying llama-server — done**
+Implemented as `backend/main.py`: `POST /v1/chat/completions` forwards the frontend's request
+to `LLAMA_SERVER_URL` almost unchanged (just forces `logprobs: true, top_logprobs: 5`), and
+`GET /health` checks reachability. Weather/traffic tools stay client-side exactly as in Phase 1
+— the backend only relays `tool_calls`, it never executes tools itself.
 
-**P2-2 — Average answer-span logprob**
-In the backend, after generation, identify the "answer span" (tokens after the prompt ends)
-and compute `avg_logprob = mean(logprob for tok in answer_tokens)`. Convert to a 0–1
-confidence signal: `conf = exp(avg_logprob)` (or a calibrated sigmoid). This is the core
-method from the Transformer Lab reference.
+**P2-2 — Average answer-span logprob — done**
+`backend/logprobs.py` reads `choices[0].logprobs.content` from the llama-server response,
+computes `avg_logprob = mean(entry.logprob for entry in content)`, and attaches
+`logprob_confidence = min(1.0, exp(avg_logprob))` to the response. `null` if the upstream
+response has no logprobs (e.g. some builds omit them during constrained tool-call decoding).
 
-**P2-3 — Logprob vs. verbalized confidence comparison**
-Add a split display in the frontend showing both signals side by side: the logprob-derived
-score (from the model's output distribution) and the verbalized self-report (from the
-`[CONFIDENCE: X.XX]` tag). Highlight cases where they diverge. This is the empirical heart
-of the article's argument.
+**P2-3 — Logprob vs. verbalized confidence comparison — done (lighter form)**
+Rather than a dedicated split-view panel, each ARIA message bubble shows a second row below
+the verbalized confidence bar — `logprob NN%` — with a `⚠ diverges` flag when the two signals
+differ by more than 0.2. The SIGNAL tab also gained a `LOGPROB CONFIDENCE` stat block below the
+existing meter. A dedicated comparison chart (second sparkline, scatter of both signals per
+question) is still open — see "Not yet built" below.
 
-**P2-4 — LoRA fine-tuning pipeline (optional, advanced)**
+**P2-4 — LoRA fine-tuning pipeline (optional, advanced) — not started**
 Implement the Transformer Lab training approach locally:
 1. Collect 500–1000 hockey questions (generate with the base model)
 2. Run inference on each, compute average answer logprob
@@ -352,40 +356,40 @@ Implement the Transformer Lab training approach locally:
 6. Compare fine-tuned vs. base model abstention behaviour in the demo
 
 This produces a model that has "baked in" self-doubt on hockey topics it was uncertain about
-during training — a different epistemological approach than live logprob gating.
+during training — a different epistemological approach than live logprob gating. Note: since
+Phase 2 inference moved to llama.cpp, this step would still need `mlx-lm` (or another
+training-capable framework) installed separately just for fine-tuning — llama.cpp is
+inference-only. Unrelated to the logprob-confidence work; still open.
+
+**Not yet built (fast-follows):**
+- A dedicated logprob-vs-verbalized comparison view (second sparkline or scatter plot) — the
+  inline bubble row + SIGNAL stat cover the same information without it for now.
 
 ---
 
-## 7. File Structure (current + planned)
+## 7. File Structure (current)
 
 ```
 honest-agent/
-├── honest-agent-v2.jsx          ← current Phase 1 demo (single file, artifact-ready)
 ├── HONEST_AGENT_SPEC.md         ← this document
+├── index.html, vite.config.js, package.json   ← Vite scaffold (local dev server)
+├── .env.example                 ← VITE_API_URL, VITE_MODEL
 │
-├── backend/                     ← Phase 2 (not yet created)
-│   ├── main.py                  ← FastAPI app
-│   ├── inference.py             ← MLX-LM wrapper + logprob extraction
-│   ├── tools.py                 ← weather, traffic, wikipedia implementations
-│   ├── kb.py                    ← knowledge base chunking + retrieval (future)
-│   └── requirements.txt
+├── src/
+│   ├── App.jsx                  ← the demo, still a single component (not yet split)
+│   └── main.jsx                 ← Vite/React entry point
 │
-└── frontend/                    ← Phase 2 (split from single file)
-    ├── src/
-    │   ├── App.jsx
-    │   ├── components/
-    │   │   ├── ChatPanel.jsx
-    │   │   ├── SignalPanel.jsx
-    │   │   ├── KnowledgePanel.jsx
-    │   │   ├── ToolsPanel.jsx
-    │   │   └── Sparkline.jsx
-    │   ├── hooks/
-    │   │   ├── useAgentLoop.js
-    │   │   └── useThreshold.js
-    │   └── api/
-    │       └── client.js
-    └── package.json
+└── backend/                     ← Phase 2 FastAPI proxy
+    ├── main.py                  ← POST /v1/chat/completions (proxy to llama-server), GET /health
+    ├── logprobs.py              ← avg-logprob → confidence extraction
+    ├── Pipfile, Pipfile.lock    ← Pipenv-managed deps (project-local venv)
+    ├── .env.example             ← LLAMA_SERVER_URL, PORT, ALLOWED_ORIGIN
+    └── README.md                ← llama-server + backend setup instructions
 ```
+
+The `frontend/components/hooks/api` split sketched in earlier versions of this doc hasn't
+happened — `App.jsx` is still one file. Worth revisiting if it keeps growing, but out of scope
+for the logprob work.
 
 ---
 
@@ -410,6 +414,42 @@ Request body:
 Tool call flow: when `stop_reason === "tool_use"`, extract `content` blocks of `type="tool_use"`,
 execute tools, return results as `{ role: "user", content: [{ type: "tool_result", tool_use_id, content }] }`.
 
+This shape is no longer used — kept here as historical record of what Phase 1 actually ran
+against. `App.jsx` was rewritten for Phase 2 to speak the shape below directly instead.
+
+### Local backend (Phase 2)
+
+Endpoint: `POST http://localhost:8787/v1/chat/completions` (`VITE_API_URL`) — a FastAPI proxy
+(`backend/main.py`) in front of `llama-server`'s own OpenAI-compatible endpoint of the same
+path. Standard OpenAI chat-completions shape throughout, plus one addition.
+
+Request body:
+```json
+{
+  "model": "local-model",
+  "max_tokens": 1000,
+  "messages": [
+    { "role": "system", "content": "<dynamic system prompt>" },
+    { "role": "user", "content": "..." }
+  ],
+  "tools": [{ "type": "function", "function": { "name": "...", "description": "...", "parameters": {...} } }]
+}
+```
+
+Response (`choices[0]`, standard OpenAI shape):
+- `finish_reason: "tool_calls"` → `message.tool_calls: [{ id, function: { name, arguments } }]`
+  (`arguments` is a JSON string — `JSON.parse` it). Echo `message` back into history, then send
+  one `{ role: "tool", tool_call_id, content }` message per executed tool call.
+- `finish_reason: "stop"` → `message.content` is the final text.
+
+Addition: the backend always requests `logprobs: true, top_logprobs: 5` from `llama-server`
+and attaches a top-level `logprob_confidence` field (0–1, or `null` if llama-server didn't
+return logprobs) to the response — this isn't part of the OpenAI schema, it's this project's
+own extension. See `backend/logprobs.py`.
+
+Weather/traffic tools still execute client-side in `App.jsx` exactly as in Phase 1; the backend
+never runs tools, it only proxies the chat turn and relays `tool_calls`.
+
 ### Open-Meteo (weather, Phase 1+2)
 
 Geocoding: `GET https://geocoding-api.open-meteo.com/v1/search?name={location}&count=1`
@@ -432,23 +472,16 @@ Search: `GET https://en.wikipedia.org/w/api.php?action=opensearch&search={query}
 
 ## 9. Development Environment
 
-- **Hardware:** Apple M4 MacBook (unified memory, Apple Silicon)
-- **Phase 1:** No local tooling needed. The `.jsx` file runs directly in a Claude artifact.
-  Paste content into claude.ai → New artifact → React component.
-- **Phase 2 Python dependencies:**
-  ```
-  mlx-lm>=0.19.0
-  fastapi>=0.110.0
-  uvicorn>=0.29.0
-  httpx>=0.27.0
-  numpy>=1.26.0
-  ```
-  Install with `pip install <package> --break-system-packages` on macOS Sonoma/Sequoia.
-- **Phase 2 model download:**
-  ```bash
-  # Downloads to ~/.cache/huggingface/hub/
-  python -c "from mlx_lm import load; load('mlx-community/Qwen2.5-7B-Instruct-4bit')"
-  ```
+- **Hardware:** developed on an Apple M4 MacBook, but Phase 2's `llama-server` runs on
+  Mac/Linux/Windows — that portability was the reason llama.cpp was chosen over MLX-LM.
+- **Phase 1 (historical):** ran directly in a Claude artifact, no local tooling. No longer how
+  the project runs.
+- **Frontend:** `npm install && npm run dev` (Vite) — see root `package.json`.
+- **Phase 2 backend dependencies** (`backend/Pipfile`, managed with Pipenv — see
+  `backend/README.md`): `fastapi`, `uvicorn`, `httpx`.
+- **Phase 2 model:** not installed by this repo — run `llama-server` separately. See
+  `backend/README.md` for the exact command and model recommendation
+  (`Qwen2.5-7B-Instruct-Q4_K_M.gguf`).
 
 ---
 
