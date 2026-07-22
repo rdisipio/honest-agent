@@ -148,7 +148,7 @@ returns `null` on total failure). Used only by `runFactCheck` — kept generic i
 feature needs another structured-output call against the same backend.
 
 #### `runFactCheck(question, answer, msgId)`
-The Wikipedia-grounded fact-check pipeline (see §4 "Wikipedia as ground truth, LOW-only
+The Wikipedia-grounded fact-check pipeline (see §4 "Wikipedia as ground truth, LOW-or-TRAINING
 trigger" for why it exists and when it fires). Three steps, each able to fail independently
 without crashing the turn:
 1. **Extract** — one `chatJSON` call: given the question and answer, name the single most
@@ -174,9 +174,10 @@ ReAct-style tool-use loop, up to 6 iterations, against the local backend (§8 "L
    `{role:"tool", tool_call_id, content}` message per result, continue loop
 3. If `finish_reason === "stop"`: extract `message.content`, parse confidence and source tags
    with regex, strip tags from display text, read the backend's `logprob_confidence` field,
-   update all state, assign the new assistant message an `id` via `nextMsgId`, and — only if
-   the self-reported bucket is `"LOW"` — fire `runFactCheck` (not awaited; runs in the
-   background so it never blocks the thinking indicator or the next turn)
+   update all state, assign the new assistant message an `id` via `nextMsgId`, and — if
+   `confidence === "LOW"` **or** `source === "TRAINING"` (`shouldFactCheck`) — fire
+   `runFactCheck` (not awaited; runs in the background so it never blocks the thinking
+   indicator or the next turn)
 
 ### 3.4 State inventory
 
@@ -294,19 +295,34 @@ hockey interview demo, and every registration-free live-traffic option evaporate
 actually need *live* congestion data rather than static routing. `get_weather` remains the only
 live-data tool.
 
-**Wikipedia as ground truth, LOW-only trigger:** Neither confidence signal (self-report,
+**Wikipedia as ground truth, LOW-or-TRAINING trigger:** Neither confidence signal (self-report,
 logprob) measures whether an answer's *content* is actually correct — both measure the model's
-own epistemic state, one narrated, one inferred. Demonstrated directly in testing: asked an
-unanswerable trick question ("what colour was the mask of the first goalie of the Maple
-Leafs?" — the Leafs' early goalies predate masks by decades), the model confabulated a specific
-wrong player while correctly self-reporting LOW confidence. `runFactCheck` (§3.3) adds a third,
-independent signal — verify the answer's central claim against a dynamically-fetched Wikipedia
-article, not just whatever's pre-loaded in the KB tab. It fires automatically, but only when
-self-report is `"LOW"`, to bound the extra latency (2 more LLM calls + a Wikipedia fetch) to
-turns the interview already flags as uncertain. **Accepted blind spot:** a HIGH-confidence
-hallucination — the more dangerous failure mode, since nothing else flags it either — never
-gets fact-checked under this trigger. A manual "verify anyway" affordance would be the natural
-follow-up if this proves too narrow in practice.
+own epistemic state, one narrated, one inferred. Demonstrated directly in testing, twice:
+1. Asked an unanswerable trick question ("what colour was the mask of the first goalie of the
+   Maple Leafs?" — the Leafs' early goalies predate masks by decades), the model confabulated a
+   specific wrong player while correctly self-reporting LOW confidence.
+2. Told a personal anecdote naming an "ex-boss Robert Orr," the model conflated the name with
+   the real Bobby Orr and confidently narrated a fabricated story about being recognized by
+   customs officials — **self-reporting HIGH**, with logprob landing on MID. The two internal
+   signals disagreed with each other, but under a LOW-only trigger, fact-checking never even
+   ran to catch it — the more dangerous failure mode (confidently wrong), and the one the whole
+   article's argument centers on, was exactly what the original trigger missed.
+
+`runFactCheck` (§3.3) fires whenever `confidence === "LOW"` **or** `source === "TRAINING"` —
+the second condition is the important one here: it targets the actual cause of hallucination
+risk (generating from unstructured general knowledge, ungrounded in any loaded KB article or
+live tool result) rather than using the model's own confidence as a proxy for it. A model can
+be just as confidently wrong about something it never checked as about something it hedged on;
+case 2 is exactly that. `SOURCE=KB` and `SOURCE=TOOLS` answers are skipped — already grounded
+in real fetched content by construction, so checking them again is lower-value (though not
+zero-value: a KB-sourced answer could still misread its own provided context).
+
+**Remaining blind spot:** this still trusts the model's own `[SOURCE]` self-report. If the tag
+is missing (non-compliance) or the model mislabels a confabulated answer as `SOURCE=KB`/`TOOLS`
+when it actually wasn't grounded, `shouldFactCheck` stays false and nothing catches it — the
+same category of problem as before, just moved from the `confidence` field to the `source`
+field. Not solvable by trigger-tuning alone; would need the fact-check to run independent of
+any model self-report (i.e., always) to fully close.
 
 **Interview format, not Q&A chatbot format:** The left panel labels speakers as INTERVIEWER /
 ARIA rather than USER / ASSISTANT to reinforce the article's framing: this is participant
@@ -334,8 +350,9 @@ observation, not a product demo.
   loaded, at default temperature (Phase 1 used `claude-sonnet-4-6`; no longer applicable).
   Self-consistency approaches (sample N at T>0, measure variance) could provide a complementary
   uncertainty signal.
-- **Fact-checking only runs on self-reported LOW.** See §4 "Wikipedia as ground truth, LOW-only
-  trigger" — HIGH-confidence hallucinations are never checked.
+- **Fact-checking trusts the model's own `[SOURCE]` self-report.** See §4 "Wikipedia as ground
+  truth, LOW-or-TRAINING trigger" — a HIGH-confidence, KB/TOOLS-mislabeled hallucination still
+  slips through, since the trigger never runs independent of what the model claims about itself.
 - **Fact-check judge is the same small local model, not a stronger verifier.** The judge call
   (`runFactCheck` step 3) uses the same `llama-server` model being fact-checked, at a small
   `max_tokens`. It can itself misjudge SUPPORTED/CONTRADICTED, especially on nuanced claims —
@@ -458,9 +475,11 @@ inference-only. Unrelated to the logprob-confidence work; still open.
 `runFactCheck` (§3.3): a third, content-level signal alongside the two confidence signals —
 extracts the answer's central claim + a Wikipedia title (one `chatJSON` call), fetches the
 article (`fetchWikipedia`), and judges SUPPORTED/CONTRADICTED/UNVERIFIABLE (a second `chatJSON`
-call). Fires automatically, gated on self-report `"LOW"` only (§4). Surfaced inline on the
-message bubble, no new tab. See §4 and §5 for the accepted HIGH-confidence blind spot and the
-"same small model judges itself" limitation.
+call). Fires automatically on `confidence === "LOW"` **or** `source === "TRAINING"` (`§4`) —
+widened from a LOW-only trigger after live testing showed a HIGH-confidence, TRAINING-sourced
+hallucination (the "ex-boss Robert Orr" conflation with the real Bobby Orr) slipping through
+undetected. Surfaced inline on the message bubble, no new tab. See §4 and §5 for the remaining
+self-report-trust blind spot and the "same small model judges itself" limitation.
 
 ---
 

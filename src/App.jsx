@@ -356,6 +356,11 @@ export default function HonestAgent() {
     const logprobConf = typeof finalData.logprob_confidence === "number" ? finalData.logprob_confidence : null;
     const logprobBucket = bucketize(logprobConf);
     const defer = conf === "LOW";
+    // Fact-check whenever self-report is LOW, or the answer is ungrounded (TRAINING) —
+    // the latter catches confident-but-wrong answers self-report alone missed, since a
+    // model can be just as confidently wrong about something it never checked as about
+    // something it hedged on.
+    const shouldFactCheck = conf === "LOW" || src === "TRAINING";
 
     if (conf !== null) setSelfHist(prev => [...prev, conf]);
     if (logprobBucket !== null) setLogprobHist(prev => [...prev, logprobBucket]);
@@ -364,7 +369,7 @@ export default function HonestAgent() {
     setApiHistory(hist);
     const msgId = nextMsgId.current++;
     setChatMsgs(prev => [...prev, { id:msgId, role:"assistant", content:clean, confidence:conf, logprobConfidence:logprobConf, source:src, deferring:defer }]);
-    if (defer) runFactCheck(userText, clean, msgId);
+    if (shouldFactCheck) runFactCheck(userText, clean, msgId);
     setIsThinking(false);
     inputRef.current?.focus();
   };
