@@ -113,6 +113,31 @@ async function fetchWikipedia(title) {
   return { title: page.title, extract: page.extract.slice(0, 2800) };
 }
 
+// ── Fact-check helpers ───────────────────────────────────────────────────────
+function parseJsonLoose(text) {
+  try { return JSON.parse(text); } catch {}
+  const m = text.match(/\{[\s\S]*\}/);
+  if (m) { try { return JSON.parse(m[0]); } catch {} }
+  return null;
+}
+
+// A small, tool-free, JSON-only chat call — used for claim extraction and judging.
+async function chatJSON(systemPrompt, userPrompt, maxTokens = 200) {
+  const res = await fetch(API_URL, {
+    method:"POST", headers:{"Content-Type":"application/json"},
+    body: JSON.stringify({
+      model: MODEL_NAME, max_tokens: maxTokens,
+      response_format: { type:"json_object" },
+      messages: [
+        { role:"system", content:systemPrompt },
+        { role:"user", content:userPrompt }
+      ]
+    })
+  });
+  const data = await res.json();
+  return parseJsonLoose(data.choices?.[0]?.message?.content ?? "");
+}
+
 // ── Confidence trace: dual-row bucket grid ───────────────────────────────────
 // A line chart implies interpolation between points, which is misleading for
 // discrete LOW/MID/HIGH buckets — a strip of coloured cells, one row per
@@ -195,6 +220,7 @@ export default function HonestAgent() {
   const [wikiError,   setWikiError]   = useState(null);
   const chatRef = useRef(null);
   const inputRef= useRef(null);
+  const nextMsgId = useRef(0);
 
   useEffect(() => {
     chatRef.current?.scrollTo({ top: chatRef.current.scrollHeight, behavior:"smooth" });
@@ -205,6 +231,55 @@ export default function HonestAgent() {
     if (name === "get_weather") { try { return await fetchWeather(inp.location); } catch(e) { return { error:e.message }; } }
     if (name === "get_game_result") { try { return await fetchGameResult(inp.team); } catch(e) { return { error:e.message }; } }
     return { error:"Unknown tool" };
+  };
+
+  // ── Wikipedia-grounded fact-check, fired automatically for LOW self-report.
+  // Targets the message by a stable id (not array index) so the async result
+  // lands on the right bubble even if more turns happen while it's running.
+  const runFactCheck = async (question, answer, msgId) => {
+    const patch = (factCheck) =>
+      setChatMsgs(prev => prev.map(m => m.id===msgId ? { ...m, factCheck } : m));
+    patch({ status:"checking" });
+
+    try {
+      const extraction = await chatJSON(
+        "You are a fact-checking assistant. Given a QUESTION and ANSWER, identify the single " +
+        "most specific, checkable factual claim in the answer, and the exact Wikipedia article " +
+        'title that would verify it. Respond ONLY as JSON: {"claim":"...","title":"..."}.',
+        `QUESTION: ${question}\n\nANSWER: ${answer}`
+      );
+      if (!extraction?.claim || !extraction?.title) {
+        patch({ status:"done", verdict:"ERROR", explanation:"Could not identify a checkable claim." });
+        return;
+      }
+
+      let article;
+      try {
+        article = await fetchWikipedia(extraction.title);
+      } catch {
+        patch({ status:"done", verdict:"UNVERIFIABLE", claim:extraction.claim, title:extraction.title,
+          explanation:`No Wikipedia article found for "${extraction.title}".` });
+        return;
+      }
+
+      const judged = await chatJSON(
+        "You are a fact-checking assistant. Given a CLAIM and a WIKIPEDIA EXCERPT, determine " +
+        "whether the excerpt SUPPORTS, CONTRADICTS, or does not address (UNVERIFIABLE) the " +
+        'claim. Respond ONLY as JSON: {"verdict":"SUPPORTED"|"CONTRADICTED"|"UNVERIFIABLE",' +
+        '"explanation":"one sentence"}.',
+        `CLAIM: ${extraction.claim}\n\nWIKIPEDIA EXCERPT (${article.title}): ${article.extract}`
+      );
+      if (!judged?.verdict) {
+        patch({ status:"done", verdict:"ERROR", claim:extraction.claim, title:article.title,
+          explanation:"Fact-check judge call failed to return a verdict." });
+        return;
+      }
+
+      patch({ status:"done", verdict:judged.verdict.toUpperCase(), claim:extraction.claim,
+        title:article.title, explanation:judged.explanation ?? "" });
+    } catch(e) {
+      patch({ status:"done", verdict:"ERROR", explanation:`Fact-check failed: ${e.message}` });
+    }
   };
 
   // ── Load a Wikipedia article into the KB
@@ -287,7 +362,9 @@ export default function HonestAgent() {
     setCurrentConf(conf); setCurrentLogprobConf(logprobConf); setIsDeferring(defer);
     setToolLog(prev => [...prev, ...newTools]);
     setApiHistory(hist);
-    setChatMsgs(prev => [...prev, { role:"assistant", content:clean, confidence:conf, logprobConfidence:logprobConf, source:src, deferring:defer }]);
+    const msgId = nextMsgId.current++;
+    setChatMsgs(prev => [...prev, { id:msgId, role:"assistant", content:clean, confidence:conf, logprobConfidence:logprobConf, source:src, deferring:defer }]);
+    if (defer) runFactCheck(userText, clean, msgId);
     setIsThinking(false);
     inputRef.current?.focus();
   };
@@ -403,6 +480,28 @@ export default function HonestAgent() {
                       </div>
                     );
                   })()}
+                  {m.factCheck && (
+                    <div style={{ marginTop:6, fontFamily:"monospace", fontSize:9 }}>
+                      {m.factCheck.status === "checking" ? (
+                        <span style={{ color:MUTED }}>🔍 checking against Wikipedia…</span>
+                      ) : m.factCheck.verdict === "SUPPORTED" ? (
+                        <span style={{ color:"#4ade80" }}
+                          title={m.factCheck.claim}>
+                          ✓ Wikipedia ({m.factCheck.title}) — supported
+                        </span>
+                      ) : m.factCheck.verdict === "CONTRADICTED" ? (
+                        <span style={{ color:"#ef4444" }}
+                          title={m.factCheck.claim}>
+                          ✗ Wikipedia contradicts ({m.factCheck.title}): {m.factCheck.explanation}
+                        </span>
+                      ) : (
+                        <span style={{ color:MUTED }}
+                          title={m.factCheck.claim}>
+                          ? Wikipedia: {m.factCheck.explanation || "inconclusive"}
+                        </span>
+                      )}
+                    </div>
+                  )}
                 </div>
               </div>
             ))}
@@ -478,19 +577,22 @@ export default function HonestAgent() {
               </div>
 
               <div style={{ fontSize:9, fontFamily:"monospace", color:MUTED,
-                letterSpacing:"0.13em", marginBottom:8 }}>LOGPROB CONFIDENCE</div>
-              <div style={{ display:"flex", alignItems:"baseline", gap:10, marginBottom:8 }}>
-                <span style={{ fontFamily:"monospace", fontSize:22, fontWeight:700,
+                letterSpacing:"0.13em", marginBottom:12 }}>LOGPROB CONFIDENCE</div>
+              <div style={{ display:"flex", alignItems:"baseline", gap:10, marginBottom:10 }}>
+                <span style={{ fontFamily:"monospace", fontSize:32, fontWeight:700,
                   color:bucketColor(bucketize(currentLogprobConf)), lineHeight:1 }}
                   title={currentLogprobConf!==null ? `${(currentLogprobConf*100).toFixed(0)}%` : undefined}>
                   {bucketize(currentLogprobConf) ?? "—"}
                 </span>
-                <span style={{ fontFamily:"monospace", fontSize:9, color:MUTED }}>
-                  exp(avg logprob) over answer span, bucketed
+                <span style={{ fontFamily:"monospace", fontSize:10, color:bucketColor(bucketize(currentLogprobConf)) }}>
+                  {bucketLabel(bucketize(currentLogprobConf))}
                 </span>
               </div>
-              <div style={{ marginBottom:24 }}>
-                <BucketBar bucket={bucketize(currentLogprobConf)} size="lg"/>
+              <BucketBar bucket={bucketize(currentLogprobConf)} size="lg"/>
+              <div style={{ marginTop:8, marginBottom:24 }}>
+                <span style={{ fontFamily:"monospace", fontSize:10, color:BORDER }}>
+                  exp(avg logprob) over answer span
+                </span>
               </div>
 
               <div style={{ fontSize:9, fontFamily:"monospace", color:MUTED,

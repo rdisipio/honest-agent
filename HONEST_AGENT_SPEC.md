@@ -140,6 +140,31 @@ Three small segments filled up to the bucket's level (LOW=1, MID=2, HIGH=3), col
 `bucketColor`. Replaces the old continuous-width percentage bar — there's no meaningful
 "72% of the way to confident" on a 3-value scale, so the bar shouldn't imply one.
 
+#### `chatJSON(systemPrompt, userPrompt, maxTokens)`
+Small helper: a tool-free chat-completions call requesting `response_format:
+{type:"json_object"}`, parsed defensively via `parseJsonLoose` (tries `JSON.parse` directly,
+falls back to regex-extracting the first `{...}` block if the model wraps the JSON in prose,
+returns `null` on total failure). Used only by `runFactCheck` — kept generic in case a future
+feature needs another structured-output call against the same backend.
+
+#### `runFactCheck(question, answer, msgId)`
+The Wikipedia-grounded fact-check pipeline (see §4 "Wikipedia as ground truth, LOW-only
+trigger" for why it exists and when it fires). Three steps, each able to fail independently
+without crashing the turn:
+1. **Extract** — one `chatJSON` call: given the question and answer, name the single most
+   checkable factual claim and the Wikipedia article title that would verify it.
+2. **Fetch** — reuses `fetchWikipedia(title)` unchanged. A missing article is a valid outcome
+   (`verdict: "UNVERIFIABLE"`), not an error path.
+3. **Judge** — a second `chatJSON` call: given the claim and the fetched excerpt, return
+   `SUPPORTED`, `CONTRADICTED`, or `UNVERIFIABLE` plus a one-sentence explanation.
+
+Targets the right message by a stable `id` (assigned via a `nextMsgId` ref counter at push
+time), not array index — array position would drift if this ever needed to survive concurrent
+turns, and updating via `setChatMsgs(prev => prev.map(...))` inside an async callback needs a
+stable key regardless. Patches the message's `factCheck` field through three states:
+`{status:"checking"}` immediately, then `{status:"done", verdict, claim, title, explanation}`
+(or `verdict:"ERROR"` on any exception) once the pipeline finishes.
+
 #### Agent loop (`sendMessage`)
 ReAct-style tool-use loop, up to 6 iterations, against the local backend (§8 "Local backend
 (Phase 2)"):
@@ -149,13 +174,16 @@ ReAct-style tool-use loop, up to 6 iterations, against the local backend (§8 "L
    `{role:"tool", tool_call_id, content}` message per result, continue loop
 3. If `finish_reason === "stop"`: extract `message.content`, parse confidence and source tags
    with regex, strip tags from display text, read the backend's `logprob_confidence` field,
-   update all state
+   update all state, assign the new assistant message an `id` via `nextMsgId`, and — only if
+   the self-reported bucket is `"LOW"` — fire `runFactCheck` (not awaited; runs in the
+   background so it never blocks the thinking indicator or the next turn)
 
 ### 3.4 State inventory
 
 | State variable | Type | Purpose |
 |---|---|---|
-| `chatMsgs` | `Message[]` | Display-side conversation (user + assistant bubbles) |
+| `chatMsgs` | `Message[]` | Display-side conversation (user + assistant bubbles). Assistant entries: `{id, role, content, confidence, logprobConfidence, source, deferring, factCheck?}` — `factCheck` is absent until/unless `runFactCheck` fires |
+| `nextMsgId` | `useRef` counter | Assigns each assistant message a stable `id` so `runFactCheck`'s async update targets the right bubble regardless of array position |
 | `apiHistory` | `ApiMessage[]` | Full chat-completions message history (includes tool_calls/tool messages) |
 | `input` | `string` | Controlled input field |
 | `isThinking` | `boolean` | Disables input, shows thinking bubble |
@@ -266,6 +294,20 @@ hockey interview demo, and every registration-free live-traffic option evaporate
 actually need *live* congestion data rather than static routing. `get_weather` remains the only
 live-data tool.
 
+**Wikipedia as ground truth, LOW-only trigger:** Neither confidence signal (self-report,
+logprob) measures whether an answer's *content* is actually correct — both measure the model's
+own epistemic state, one narrated, one inferred. Demonstrated directly in testing: asked an
+unanswerable trick question ("what colour was the mask of the first goalie of the Maple
+Leafs?" — the Leafs' early goalies predate masks by decades), the model confabulated a specific
+wrong player while correctly self-reporting LOW confidence. `runFactCheck` (§3.3) adds a third,
+independent signal — verify the answer's central claim against a dynamically-fetched Wikipedia
+article, not just whatever's pre-loaded in the KB tab. It fires automatically, but only when
+self-report is `"LOW"`, to bound the extra latency (2 more LLM calls + a Wikipedia fetch) to
+turns the interview already flags as uncertain. **Accepted blind spot:** a HIGH-confidence
+hallucination — the more dangerous failure mode, since nothing else flags it either — never
+gets fact-checked under this trigger. A manual "verify anyway" affordance would be the natural
+follow-up if this proves too narrow in practice.
+
 **Interview format, not Q&A chatbot format:** The left panel labels speakers as INTERVIEWER /
 ARIA rather than USER / ASSISTANT to reinforce the article's framing: this is participant
 observation, not a product demo.
@@ -285,11 +327,22 @@ observation, not a product demo.
 - **System prompt injection is naive.** The full Wikipedia extract is appended verbatim. No
   chunking, no relevance scoring, no deduplication. The model may not attend to all KB content
   equally, especially near context window limits.
-- **No confidence calibration evaluation.** We don't know if a self-reported 0.85 actually
-  corresponds to 85% accuracy. A held-out labeled test set would be needed to assess this.
-- **Single model, single temperature.** The agent always uses `claude-sonnet-4-6` at default
-  temperature. Self-consistency approaches (sample N at T>0, measure variance) could provide
-  a complementary uncertainty signal.
+- **No confidence calibration evaluation.** We don't know if a self-reported HIGH actually
+  corresponds to a meaningfully higher accuracy rate than MID. A held-out labeled test set would
+  be needed to assess this.
+- **Single model, single temperature.** The agent always uses whatever model `llama-server` has
+  loaded, at default temperature (Phase 1 used `claude-sonnet-4-6`; no longer applicable).
+  Self-consistency approaches (sample N at T>0, measure variance) could provide a complementary
+  uncertainty signal.
+- **Fact-checking only runs on self-reported LOW.** See §4 "Wikipedia as ground truth, LOW-only
+  trigger" — HIGH-confidence hallucinations are never checked.
+- **Fact-check judge is the same small local model, not a stronger verifier.** The judge call
+  (`runFactCheck` step 3) uses the same `llama-server` model being fact-checked, at a small
+  `max_tokens`. It can itself misjudge SUPPORTED/CONTRADICTED, especially on nuanced claims —
+  there's no independent, more capable verifier in the loop.
+- **Claim extraction assumes one checkable claim per answer.** `runFactCheck` step 1 asks for
+  "the single most specific... claim" — a longer answer with multiple factual assertions only
+  gets one checked; the rest go unverified.
 
 ---
 
@@ -400,6 +453,14 @@ during training — a different epistemological approach than live logprob gatin
 Phase 2 inference moved to llama.cpp, this step would still need `mlx-lm` (or another
 training-capable framework) installed separately just for fine-tuning — llama.cpp is
 inference-only. Unrelated to the logprob-confidence work; still open.
+
+**P2-5 — Wikipedia-grounded fact-checking — done**
+`runFactCheck` (§3.3): a third, content-level signal alongside the two confidence signals —
+extracts the answer's central claim + a Wikipedia title (one `chatJSON` call), fetches the
+article (`fetchWikipedia`), and judges SUPPORTED/CONTRADICTED/UNVERIFIABLE (a second `chatJSON`
+call). Fires automatically, gated on self-report `"LOW"` only (§4). Surfaced inline on the
+message bubble, no new tab. See §4 and §5 for the accepted HIGH-confidence blind spot and the
+"same small model judges itself" limitation.
 
 ---
 
