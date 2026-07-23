@@ -56,8 +56,9 @@ already matches this port, so no frontend config is needed for the default setup
 - The weather and game-result tools still execute client-side in the browser (`src/App.jsx`);
   this backend never runs tools itself, it only proxies the chat turn and
   relays `tool_calls` back to the frontend to execute.
-- `GET /nhl/game_details?team1=...&team2=...&date=YYYY-MM-DD` (`nhl.py`) is the one exception:
-  it's a small passthrough to the NHL's public `api-web.nhle.com` API, needed because that API
-  sends no CORS headers and can't be called directly from the browser like the other tool APIs.
-  This backend still doesn't run the tool-calling loop itself — the frontend's `get_game_details`
-  tool just calls this route over plain HTTP instead of fetching the NHL API directly.
+- `GET /nhl/game_details?team1=...&team2=...&date=YYYY-MM-DD` and `GET /nhl/team_stats?team=...`
+  (`nhl.py`) are the exceptions: small passthroughs to the NHL's public `api-web.nhle.com` API,
+  needed because that API sends no CORS headers and can't be called directly from the browser
+  like the other tool APIs. This backend still doesn't run the tool-calling loop itself — the
+  frontend's `get_game_details`/`get_team_stats` tools just call these routes over plain HTTP
+  instead of fetching the NHL API directly.

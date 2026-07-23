@@ -6,7 +6,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from logprobs import attach_logprob_confidence
-from nhl import fetch_game_details
+from nhl import fetch_game_details, fetch_team_stats
 
 LLAMA_SERVER_URL = os.environ.get("LLAMA_SERVER_URL", "http://localhost:8080")
 ALLOWED_ORIGIN = os.environ.get("ALLOWED_ORIGIN", "http://localhost:5173")
@@ -33,6 +33,11 @@ async def health():
 @app.get("/nhl/game_details")
 async def nhl_game_details(team1: str, team2: str, date: str):
     return await fetch_game_details(team1, team2, date)
+
+
+@app.get("/nhl/team_stats")
+async def nhl_team_stats(team: str):
+    return await fetch_team_stats(team)
 
 
 @app.post("/v1/chat/completions")

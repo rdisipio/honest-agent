@@ -141,6 +141,31 @@ such game is found on that date, or either upstream call fails.
 Deliberately still no queryable "history" or stats beyond the single specific game asked
 about — same "not a full-fledged data analytics backend" spirit as the rest of the tool set.
 
+#### `fetchTeamStats(team)`
+The grounding tool for prediction-style questions ("who's the best prospect", "what are the
+Habs' chances at the Cup") — the kind of question no API can answer directly, since it's a
+judgment call, not a lookup. Calls the backend's `GET /nhl/team_stats` route (`backend/nhl.py`,
+`fetch_team_stats`), same CORS-proxy reasoning as `fetchGameDetails`. Concurrently fetches three
+`api-web.nhle.com` endpoints (`asyncio.gather`) and returns `{ team, record, top_scorers,
+prospects, note }`:
+- `record` — current standings row for the team (wins/losses/OT losses, points, point
+  percentage, streak, division/conference rank, games played)
+- `top_scorers` — top 5 skaters on the current roster by points (name, position, goals, assists,
+  points, games played)
+- `prospects` — up to 10 entries (5 forwards, 3 defensemen, 2 goalies, youngest first within each
+  group) with name/position/age only — the NHL API has no scouting rank or draft position, so
+  this is bio data, not a ranking
+- `note` — a fixed string reminding the model (and stapled into every response so it can't be
+  missed) that the prospect list is unranked and that none of this data forecasts anything;
+  identifying a "best" prospect or predicting future results from it is the model's own opinion,
+  not a sourced fact
+
+The system prompt (`buildSystemPrompt`) instructs the model to call this before any
+prediction-style question, answer as an informed guess grounded in the returned data rather than
+a retrieved fact, never self-report HIGH confidence on a prediction, and explicitly decline to
+frame the answer in betting/odds/wagering terms — this tool exists to let PUCK guess more
+usefully mid-conversation, not to produce betting picks.
+
 #### `fetchWikipedia(title)`
 Calls the Wikipedia MediaWiki API (`action=query`, `prop=extracts`, `exintro=true`,
 `explaintext=true`, `origin=*`). Extracts the intro section only, capped at 2800 characters.
@@ -625,9 +650,10 @@ honest-agent/
 │
 └── backend/                     ← Phase 2 FastAPI proxy
     ├── main.py                  ← POST /v1/chat/completions (proxy to llama-server), GET /health,
-    │                               GET /nhl/game_details (proxy to NHL API, CORS workaround)
+    │                               GET /nhl/game_details, GET /nhl/team_stats (NHL API proxies, CORS workaround)
     ├── logprobs.py              ← avg-logprob → confidence extraction
-    ├── nhl.py                   ← team-name resolution + schedule/boxscore lookup for get_game_details
+    ├── nhl.py                   ← team-name resolution + schedule/boxscore/standings/prospects
+    │                               lookups for get_game_details and get_team_stats
     ├── Pipfile, Pipfile.lock    ← Pipenv-managed deps (project-local venv)
     ├── .env.example             ← LLAMA_SERVER_URL, PORT, ALLOWED_ORIGIN
     └── README.md                ← llama-server + backend setup instructions
@@ -694,21 +720,30 @@ return logprobs) to the response — this isn't part of the OpenAI schema, it's 
 own extension. See `backend/logprobs.py`.
 
 The weather and game-result tools still execute client-side in `App.jsx` exactly as in Phase 1; the backend
-never runs tools, it only proxies the chat turn and relays `tool_calls`. The one exception is
-`get_game_details` (below): its data fetch is proxied through the backend, but the tool-calling loop
-itself is still entirely client-side — the backend has no knowledge of `TOOLS_DEF` or when it's called.
+never runs tools, it only proxies the chat turn and relays `tool_calls`. The two exceptions are
+`get_game_details` and `get_team_stats` (below): their data fetch is proxied through the backend,
+but the tool-calling loop itself is still entirely client-side — the backend has no knowledge of
+`TOOLS_DEF` or when either is called.
 
-### NHL API (game details, Phase 2)
+### NHL API (game details and team stats, Phase 2)
 
-Endpoint: `GET http://localhost:8787/nhl/game_details?team1={name}&team2={name}&date={YYYY-MM-DD}`
-— a FastAPI proxy (`backend/nhl.py`) in front of two `api-web.nhle.com` endpoints, added solely
-because that API doesn't send CORS headers (unlike Open-Meteo/Wikipedia/TheSportsDB, which the
-other tools call directly from the browser).
+`GET http://localhost:8787/nhl/game_details?team1={name}&team2={name}&date={YYYY-MM-DD}` and
+`GET http://localhost:8787/nhl/team_stats?team={name}` — FastAPI proxies (`backend/nhl.py`) in
+front of several `api-web.nhle.com` endpoints, added solely because that API doesn't send CORS
+headers (unlike Open-Meteo/Wikipedia/TheSportsDB, which the other tools call directly from the
+browser).
 
-Response: `{ date, away_team, home_team, away_score, home_score, away_goalies, home_goalies }`,
-where each `*_goalies` is a list of `{ name, starter, decision, saves, shots_against }` for
-goalies who actually played. `{ error }` if either team name doesn't resolve to a known NHL
-club, no game between the two is found on that date, or an upstream call fails.
+`/nhl/game_details` response: `{ date, away_team, home_team, away_score, home_score,
+away_goalies, home_goalies }`, where each `*_goalies` is a list of `{ name, starter, decision,
+saves, shots_against }` for goalies who actually played. `{ error }` if either team name doesn't
+resolve to a known NHL club, no game between the two is found on that date, or an upstream call
+fails.
+
+`/nhl/team_stats` response: `{ team, record, top_scorers, prospects, note }` — current standings
+row, top-5 scorers by points, up to 10 unranked prospects (bio data only), and a fixed `note`
+string reminding the model that none of this forecasts anything. `{ error }` if the team name
+doesn't resolve or the standings/stats calls fail. See §3.3 `fetchTeamStats` for the full shape
+and the prediction-honesty framing this tool exists to support.
 
 ### Open-Meteo (weather, Phase 1+2)
 

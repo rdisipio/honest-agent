@@ -40,8 +40,9 @@ Your epistemic rules:
 • When a question is covered by your Knowledge Base, answer confidently from it.
 • When a question falls OUTSIDE your KB, be explicit that you are relying on general training memory and lower your confidence score accordingly.
 • Never bluff. Name the texture of your uncertainty: out of scope? Temporally stale? Possibly confabulated?
-• Use get_weather, get_game_result, or get_game_details for live data only.
+• Use get_weather, get_game_result, get_game_details, or get_team_stats for live data only.
 • get_game_result only returns a team's most recent game — if asked about a specific past game (an opponent and a date), use get_game_details instead.
+• For questions asking you to predict, guess, or judge something (best prospect, chances of winning the Cup, how a team will do this season), call get_team_stats first and ground your answer in the real record/roster/prospect data it returns — then answer as an informed guess, not a retrieved fact. Say so explicitly ("based on current form, my guess is…") and this is never HIGH confidence: a prediction is not something you can look up, no matter how good the grounding data is. You are not giving betting advice — decline to frame any prediction in terms of odds to bet on, stakes, or wagering, and note plainly that outcomes years out are inherently uncertain.
 
 MANDATORY FORMAT — every response must end with these two tags on their own lines:
 [CONFIDENCE: LOW|MID|HIGH]
@@ -113,6 +114,13 @@ async function fetchGameDetails(team1, team2, date) {
     `${BACKEND_BASE}/nhl/game_details?team1=${encodeURIComponent(team1)}` +
     `&team2=${encodeURIComponent(team2)}&date=${encodeURIComponent(date)}`
   );
+  const data = await res.json();
+  if (data.error) return { error: data.error };
+  return data;
+}
+
+async function fetchTeamStats(team) {
+  const res = await fetch(`${BACKEND_BASE}/nhl/team_stats?team=${encodeURIComponent(team)}`);
   const data = await res.json();
   if (data.error) return { error: data.error };
   return data;
@@ -303,7 +311,9 @@ const TOOLS_DEF = [
       team1:{type:"string", description:"One of the two teams, e.g. 'Canadiens' or 'Habs'."},
       team2:{type:"string", description:"The other team, e.g. 'Maple Leafs' or 'Leafs'."},
       date:{type:"string", description:"Game date in YYYY-MM-DD format."}
-    }, required:["team1","team2","date"] }}}
+    }, required:["team1","team2","date"] }}},
+  { type:"function", function:{ name:"get_team_stats", description:"Get a team's current record/standing, top scorers this season, and a bio-only (unranked) prospect list. Use as grounding before answering a prediction-style question (best prospect, playoff/Cup chances, how good is this team) — it describes current state, it does not forecast anything.",
+    parameters:{ type:"object", properties:{ team:{type:"string", description:"e.g. 'Canadiens' or 'Habs'."} }, required:["team"] }}}
 ];
 
 // ── Main component ───────────────────────────────────────────────────────────
@@ -333,6 +343,7 @@ export default function HonestAgent() {
     if (name === "get_weather") { try { return await fetchWeather(inp.location); } catch(e) { return { error:e.message }; } }
     if (name === "get_game_result") { try { return await fetchGameResult(inp.team); } catch(e) { return { error:e.message }; } }
     if (name === "get_game_details") { try { return await fetchGameDetails(inp.team1, inp.team2, inp.date); } catch(e) { return { error:e.message }; } }
+    if (name === "get_team_stats") { try { return await fetchTeamStats(inp.team); } catch(e) { return { error:e.message }; } }
     return { error:"Unknown tool" };
   };
 
