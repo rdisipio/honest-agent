@@ -2,6 +2,10 @@ import { useState, useEffect, useRef, useMemo } from "react";
 
 // Local backend, OpenAI-chat-completions-shaped (see backend/README.md).
 const API_URL    = import.meta.env.VITE_API_URL || "http://localhost:8787/v1/chat/completions";
+// Base origin of the same backend, for its non-chat proxy routes (e.g. /nhl/*)
+// that exist to get around CORS-blocked upstream APIs (the NHL's API sends no
+// CORS headers, unlike Open-Meteo/Wikipedia/TheSportsDB, which run client-side).
+const BACKEND_BASE = API_URL.replace(/\/v1\/chat\/completions$/, "");
 const MODEL_NAME  = import.meta.env.VITE_MODEL   || "local-model";
 // TheSportsDB's published free/shared demo key — not a secret, no signup required.
 const SPORTSDB_KEY = import.meta.env.VITE_SPORTSDB_KEY || "123";
@@ -36,7 +40,8 @@ Your epistemic rules:
 • When a question is covered by your Knowledge Base, answer confidently from it.
 • When a question falls OUTSIDE your KB, be explicit that you are relying on general training memory and lower your confidence score accordingly.
 • Never bluff. Name the texture of your uncertainty: out of scope? Temporally stale? Possibly confabulated?
-• Use get_weather or get_game_result for live data only.
+• Use get_weather, get_game_result, or get_game_details for live data only.
+• get_game_result only returns a team's most recent game — if asked about a specific past game (an opponent and a date), use get_game_details instead.
 
 MANDATORY FORMAT — every response must end with these two tags on their own lines:
 [CONFIDENCE: LOW|MID|HIGH]
@@ -101,6 +106,16 @@ async function fetchGameResult(team) {
     date: game.dateEvent, venue: game.strVenue, league: game.strLeague,
     source: "live"
   };
+}
+
+async function fetchGameDetails(team1, team2, date) {
+  const res = await fetch(
+    `${BACKEND_BASE}/nhl/game_details?team1=${encodeURIComponent(team1)}` +
+    `&team2=${encodeURIComponent(team2)}&date=${encodeURIComponent(date)}`
+  );
+  const data = await res.json();
+  if (data.error) return { error: data.error };
+  return data;
 }
 
 // ── Wikipedia fetchers ───────────────────────────────────────────────────────
@@ -282,7 +297,13 @@ const TOOLS_DEF = [
   { type:"function", function:{ name:"get_weather", description:"Get live weather for a city.",
     parameters:{ type:"object", properties:{ location:{type:"string"} }, required:["location"] }}},
   { type:"function", function:{ name:"get_game_result", description:"Get the result of the most recent game played by a hockey team.",
-    parameters:{ type:"object", properties:{ team:{type:"string"} }, required:["team"] }}}
+    parameters:{ type:"object", properties:{ team:{type:"string"} }, required:["team"] }}},
+  { type:"function", function:{ name:"get_game_details", description:"Get the details of a specific past NHL game between two teams on a given date, including which goalie started for each team, decision, and saves. Use this for questions about a particular game rather than a team's most recent result.",
+    parameters:{ type:"object", properties:{
+      team1:{type:"string", description:"One of the two teams, e.g. 'Canadiens' or 'Habs'."},
+      team2:{type:"string", description:"The other team, e.g. 'Maple Leafs' or 'Leafs'."},
+      date:{type:"string", description:"Game date in YYYY-MM-DD format."}
+    }, required:["team1","team2","date"] }}}
 ];
 
 // ── Main component ───────────────────────────────────────────────────────────
@@ -311,6 +332,7 @@ export default function HonestAgent() {
   const executeTool = async (name, inp) => {
     if (name === "get_weather") { try { return await fetchWeather(inp.location); } catch(e) { return { error:e.message }; } }
     if (name === "get_game_result") { try { return await fetchGameResult(inp.team); } catch(e) { return { error:e.message }; } }
+    if (name === "get_game_details") { try { return await fetchGameDetails(inp.team1, inp.team2, inp.date); } catch(e) { return { error:e.message }; } }
     return { error:"Unknown tool" };
   };
 

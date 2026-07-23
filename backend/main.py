@@ -6,6 +6,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from logprobs import attach_logprob_confidence
+from nhl import fetch_game_details
 
 LLAMA_SERVER_URL = os.environ.get("LLAMA_SERVER_URL", "http://localhost:8080")
 ALLOWED_ORIGIN = os.environ.get("ALLOWED_ORIGIN", "http://localhost:5173")
@@ -27,6 +28,11 @@ async def health():
         return {"backend": "ok", "llama_server": "ok" if res.status_code == 200 else "unreachable"}
     except httpx.HTTPError:
         return JSONResponse(status_code=503, content={"backend": "ok", "llama_server": "unreachable"})
+
+
+@app.get("/nhl/game_details")
+async def nhl_game_details(team1: str, team2: str, date: str):
+    return await fetch_game_details(team1, team2, date)
 
 
 @app.post("/v1/chat/completions")

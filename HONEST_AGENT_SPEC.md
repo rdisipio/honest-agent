@@ -122,7 +122,24 @@ Two-step, same shape as `fetchWeather`: resolve team name → `idTeam` via TheSp
 team played. Uses TheSportsDB's published shared demo key (`123`, not a secret) by default —
 overridable via `VITE_SPORTSDB_KEY`. No registration required. Free-tier limitation: only the
 single most recent result is returned, not a queryable history — there's no way to ask about
-a specific past game by date/opponent, only "what happened in team X's last game."
+a specific past game by date/opponent, only "what happened in team X's last game." (This gap is
+now covered by `fetchGameDetails` below, for the specific-game case.)
+
+#### `fetchGameDetails(team1, team2, date)`
+Answers "who played goalie in the Habs–Leafs game on \<date\>"-style questions, which
+`fetchGameResult` structurally can't (see above). Calls the backend's `GET /nhl/game_details`
+route (`backend/nhl.py`) rather than an upstream API directly — the NHL's public
+`api-web.nhle.com` API sends no CORS headers, so it can't be fetched from the browser like
+Open-Meteo/Wikipedia/TheSportsDB can. The backend resolves both team names to abbreviations
+(`TEAM_ABBREVS`, a hand-maintained alias table — the NHL API has no search-by-name endpoint),
+fetches `/v1/schedule/{date}` (returns a 7-day window starting at `date`; only the first day is
+used), finds the game between the two teams, then fetches its `/v1/gamecenter/{id}/boxscore` for
+final score and both teams' goalies (name, starter, decision, saves, shots against — skipped if
+`toi` is `"00:00"`, i.e. never played). Returns `{error}` if either team name doesn't resolve, no
+such game is found on that date, or either upstream call fails.
+
+Deliberately still no queryable "history" or stats beyond the single specific game asked
+about — same "not a full-fledged data analytics backend" spirit as the rest of the tool set.
 
 #### `fetchWikipedia(title)`
 Calls the Wikipedia MediaWiki API (`action=query`, `prop=extracts`, `exintro=true`,
@@ -607,8 +624,10 @@ honest-agent/
 │   └── main.jsx                 ← Vite/React entry point
 │
 └── backend/                     ← Phase 2 FastAPI proxy
-    ├── main.py                  ← POST /v1/chat/completions (proxy to llama-server), GET /health
+    ├── main.py                  ← POST /v1/chat/completions (proxy to llama-server), GET /health,
+    │                               GET /nhl/game_details (proxy to NHL API, CORS workaround)
     ├── logprobs.py              ← avg-logprob → confidence extraction
+    ├── nhl.py                   ← team-name resolution + schedule/boxscore lookup for get_game_details
     ├── Pipfile, Pipfile.lock    ← Pipenv-managed deps (project-local venv)
     ├── .env.example             ← LLAMA_SERVER_URL, PORT, ALLOWED_ORIGIN
     └── README.md                ← llama-server + backend setup instructions
@@ -675,7 +694,21 @@ return logprobs) to the response — this isn't part of the OpenAI schema, it's 
 own extension. See `backend/logprobs.py`.
 
 The weather and game-result tools still execute client-side in `App.jsx` exactly as in Phase 1; the backend
-never runs tools, it only proxies the chat turn and relays `tool_calls`.
+never runs tools, it only proxies the chat turn and relays `tool_calls`. The one exception is
+`get_game_details` (below): its data fetch is proxied through the backend, but the tool-calling loop
+itself is still entirely client-side — the backend has no knowledge of `TOOLS_DEF` or when it's called.
+
+### NHL API (game details, Phase 2)
+
+Endpoint: `GET http://localhost:8787/nhl/game_details?team1={name}&team2={name}&date={YYYY-MM-DD}`
+— a FastAPI proxy (`backend/nhl.py`) in front of two `api-web.nhle.com` endpoints, added solely
+because that API doesn't send CORS headers (unlike Open-Meteo/Wikipedia/TheSportsDB, which the
+other tools call directly from the browser).
+
+Response: `{ date, away_team, home_team, away_score, home_score, away_goalies, home_goalies }`,
+where each `*_goalies` is a list of `{ name, starter, decision, saves, shots_against }` for
+goalies who actually played. `{ error }` if either team name doesn't resolve to a known NHL
+club, no game between the two is found on that date, or an upstream call fails.
 
 ### Open-Meteo (weather, Phase 1+2)
 
