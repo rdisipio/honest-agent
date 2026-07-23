@@ -465,11 +465,21 @@ in roughly this order. Each task is independent unless noted.
 Originally scoped as "Phase 1, React artifact, no backend" items — that constraint is gone
 (§1), but the feature ideas below are still frontend-only work, independent of the backend.
 
-**P1-1 — Session persistence**
+**P1-1 — Session persistence (partially done)**
 Originally sketched around the Claude artifact's `window.storage` API (no real `localStorage`
 in that sandbox) — no longer a constraint now that this is a normal Vite app, so just use
 `localStorage` directly. Persist: `kb` (loaded articles), `selfHist`, `logprobHist`, and
-`chatMsgs`. Load on mount. Add a "Clear session" button.
+`chatMsgs`. Load on mount. Still open — `localStorage` persistence isn't implemented.
+
+The "Clear session" button *is* done, and turned out to be needed for a reason beyond the
+original sketch: `clearSession()` resets `chatMsgs`/`apiHistory`/`selfHist`/`logprobHist`/
+`toolLog`/confidence state but deliberately leaves `kb` untouched. Motivating case, observed
+live: adding a KB article mid-conversation and retrying a question got the same wrong answer,
+because the system prompt rebuilds from current `kb` every turn (no bug there), but the model
+also sees its own prior wrong answer still sitting in `apiHistory` and tends to anchor on it
+rather than reconsider in light of the newly-added context. A full page reload "fixed" it by
+wiping history — but also threw away every loaded KB article, requiring reloading them from
+scratch. The button gives a faster way to force the same clean-history retry without that cost.
 
 **P1-2 — Export conversation to Markdown**
 Add an "Export" button that formats `chatMsgs` as a Markdown document with speaker labels,

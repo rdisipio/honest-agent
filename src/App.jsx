@@ -269,12 +269,59 @@ export default function HonestAgent() {
   // ── Wikipedia-grounded fact-check, fired automatically for LOW self-report.
   // Targets the message by a stable id (not array index) so the async result
   // lands on the right bubble even if more turns happen while it's running.
-  const runFactCheck = async (question, answer, msgId) => {
+  const runFactCheck = async (question, answer, msgId, source) => {
     const patch = (factCheck) =>
       setChatMsgs(prev => prev.map(m => m.id===msgId ? { ...m, factCheck } : m));
-    patch({ status:"checking" });
+    patch({ status:"checking", groundedIn: source==="KB" ? "KB" : "TRAINING" });
 
     try {
+      // SOURCE=KB claims used to skip fact-checking entirely, on the assumption
+      // that KB-grounded answers are already trustworthy. Observed directly:
+      // that assumption can fail — the model claimed KB grounding for Gretzky's
+      // points record while naming Jágr instead. Verify against the actual
+      // loaded KB text (already in memory, no Wikipedia fetch needed) rather
+      // than trusting the self-reported label.
+      if (source === "KB") {
+        if (kb.length === 0) {
+          patch({ status:"done", verdict:"ERROR", groundedIn:"KB",
+            explanation:"Answer claimed SOURCE=KB but no KB articles are loaded." });
+          return;
+        }
+
+        const extraction = await chatJSON(
+          "You are a fact-checking assistant. Given a QUESTION and an ANSWER that claims to be " +
+          "grounded in a loaded knowledge base, identify the single most specific, checkable " +
+          'factual claim in the answer. Respond ONLY as JSON: {"claim":"..."}.',
+          `QUESTION: ${question}\n\nANSWER: ${answer}`
+        );
+        if (!extraction?.claim) {
+          patch({ status:"done", verdict:"ERROR", groundedIn:"KB",
+            explanation:"Could not identify a checkable claim." });
+          return;
+        }
+
+        const kbText = kb.map(a => `--- ${a.title} ---\n${a.extract}`).join("\n\n");
+        const judged = await chatJSON(
+          "You are a fact-checking assistant. Given a CLAIM and KNOWLEDGE BASE TEXT, determine " +
+          "whether the text SUPPORTS, CONTRADICTS, or does not address (UNVERIFIABLE) the " +
+          'claim. Respond ONLY as JSON: {"verdict":"SUPPORTED"|"CONTRADICTED"|"UNVERIFIABLE",' +
+          '"explanation":"one sentence"}.',
+          `CLAIM: ${extraction.claim}\n\nKNOWLEDGE BASE TEXT: ${kbText}`
+        );
+        if (!judged?.verdict) {
+          patch({ status:"done", verdict:"ERROR", claim:extraction.claim, groundedIn:"KB",
+            explanation:"Fact-check judge call failed to return a verdict." });
+          return;
+        }
+
+        patch({ status:"done", verdict:judged.verdict.toUpperCase(), claim:extraction.claim,
+          title:kb.map(a => a.title).join(", "), groundedIn:"KB",
+          explanation:judged.explanation ?? "" });
+        return;
+      }
+
+      // SOURCE=TRAINING (or self-report LOW regardless of source): no KB to
+      // check against, so identify a Wikipedia article and fetch it fresh.
       const extraction = await chatJSON(
         "You are a fact-checking assistant. Given a QUESTION and ANSWER, identify the single " +
         "most specific, checkable factual claim in the answer, and the exact Wikipedia article " +
@@ -330,6 +377,24 @@ export default function HonestAgent() {
       setWikiInput("");
     } catch(e) { setWikiError(e.message); }
     finally    { setWikiLoading(false); }
+  };
+
+  // ── Clear the conversation, keep the loaded KB
+  // Retrying a question after adding a KB article mid-conversation can still
+  // get the old wrong answer: the system prompt rebuilds with the new article
+  // every turn, but the model also sees its own prior (wrong) answer still
+  // sitting in the visible history and tends to anchor on it rather than
+  // reconsider. This clears that history without making you reload the page
+  // and re-load every KB article from scratch.
+  const clearSession = () => {
+    setChatMsgs([]);
+    setApiHistory([]);
+    setSelfHist([]);
+    setLogprobHist([]);
+    setToolLog([]);
+    setCurrentConf(null);
+    setCurrentLogprobConf(null);
+    setIsDeferring(false);
   };
 
   // ── Main send/agent loop
@@ -395,11 +460,12 @@ export default function HonestAgent() {
     const logprobConf = typeof finalData.logprob_confidence === "number" ? finalData.logprob_confidence : null;
     const logprobBucket = bucketize(logprobConf);
     const defer = conf === "LOW";
-    // Fact-check whenever self-report is LOW, or the answer is ungrounded (TRAINING) —
-    // the latter catches confident-but-wrong answers self-report alone missed, since a
-    // model can be just as confidently wrong about something it never checked as about
-    // something it hedged on.
-    const shouldFactCheck = conf === "LOW" || src === "TRAINING";
+    // Fact-check whenever self-report is LOW, the answer is ungrounded (TRAINING), or the
+    // answer claims KB grounding — the last one closes a real gap: a model can claim
+    // SOURCE=KB while still contradicting the very article it claims to have used (observed
+    // directly: claimed KB grounding, named Jágr instead of Gretzky for the NHL points
+    // record). TOOLS stays excluded — live API results aren't Wikipedia-checkable claims.
+    const shouldFactCheck = conf === "LOW" || src === "TRAINING" || src === "KB";
 
     if (conf !== null) setSelfHist(prev => [...prev, conf]);
     if (logprobBucket !== null) setLogprobHist(prev => [...prev, logprobBucket]);
@@ -408,7 +474,7 @@ export default function HonestAgent() {
     setApiHistory(hist);
     const msgId = nextMsgId.current++;
     setChatMsgs(prev => [...prev, { id:msgId, role:"assistant", content:clean, confidence:conf, logprobConfidence:logprobConf, source:src, deferring:defer }]);
-    if (shouldFactCheck) runFactCheck(userText, clean, msgId);
+    if (shouldFactCheck) runFactCheck(userText, clean, msgId, src);
     setIsThinking(false);
     inputRef.current?.focus();
   };
@@ -441,7 +507,15 @@ export default function HonestAgent() {
             📚 {kb.length} article{kb.length!==1?"s":""} loaded
           </span>
         )}
-        <span style={{ marginLeft:"auto", fontFamily:"monospace", fontSize:12, color:FAINT }}>v0.2 · hockey</span>
+        <button onClick={clearSession} disabled={chatMsgs.length===0}
+          title="Clear the conversation, keep loaded KB articles"
+          style={{ marginLeft:"auto", background:"transparent", border:`1px solid ${BORDER}`,
+            borderRadius:6, padding:"4px 10px", fontFamily:"monospace", fontSize:11,
+            color: chatMsgs.length===0 ? FAINT : MUTED,
+            cursor: chatMsgs.length===0 ? "not-allowed" : "pointer" }}>
+          ↺ Clear session
+        </button>
+        <span style={{ fontFamily:"monospace", fontSize:12, color:FAINT }}>v0.2 · hockey</span>
       </div>
 
       {/* ── Body ── */}
@@ -538,7 +612,9 @@ export default function HonestAgent() {
                   {m.factCheck && (
                     <div style={{ marginTop:6, fontFamily:"monospace", fontSize:11, lineHeight:1.6 }}>
                       {m.factCheck.status === "checking" ? (
-                        <span style={{ color:MUTED }}>🔍 checking against Wikipedia…</span>
+                        <span style={{ color:MUTED }}>
+                          🔍 checking against {m.factCheck.groundedIn==="KB" ? "your loaded KB" : "Wikipedia"}…
+                        </span>
                       ) : (
                         <>
                           <div style={{ color:
@@ -555,6 +631,22 @@ export default function HonestAgent() {
                               <span title={m.factCheck.claim}>
                                 searched for "{m.factCheck.title}" on Wikipedia — no matching article exists
                               </span>
+                            ) : m.factCheck.groundedIn==="KB" ? (
+                              m.factCheck.title ? (
+                                <span title={m.factCheck.claim}>
+                                  checked against your loaded KB:{" "}
+                                  {m.factCheck.title.includes(",") ? (
+                                    m.factCheck.title
+                                  ) : (
+                                    <a href={`https://en.wikipedia.org/wiki/${encodeURIComponent(m.factCheck.title.replace(/ /g,"_"))}`}
+                                      target="_blank" rel="noreferrer" style={{ color:ACCENT }}>
+                                      {m.factCheck.title}
+                                    </a>
+                                  )}
+                                </span>
+                              ) : (
+                                <span title={m.factCheck.claim}>{m.factCheck.explanation}</span>
+                              )
                             ) : m.factCheck.title ? (
                               <>
                                 checked against{" "}
