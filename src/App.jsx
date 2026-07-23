@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useMemo } from "react";
 
 // Local backend, OpenAI-chat-completions-shaped (see backend/README.md).
 const API_URL    = import.meta.env.VITE_API_URL || "http://localhost:8787/v1/chat/completions";
@@ -156,29 +156,81 @@ async function chatJSON(systemPrompt, userPrompt, maxTokens = 200) {
   return parseJsonLoose(data.choices?.[0]?.message?.content ?? "");
 }
 
-// ── Confidence trace: dual-row bucket grid ───────────────────────────────────
-// A line chart implies interpolation between points, which is misleading for
-// discrete LOW/MID/HIGH buckets — a strip of coloured cells, one row per
-// signal, makes turn-by-turn agreement/divergence easy to scan instead.
-function ConfidenceTrace({ selfHist, logprobHist }) {
-  const n = Math.max(selfHist.length, logprobHist.length);
-  if (n < 1) return null;
-  const cell = (bucket, key) => (
-    <div key={key} title={bucket ?? "no data"} style={{ width:10, height:10, borderRadius:2,
-      background: bucket ? bucketColor(bucket) : "#e2e8f0" }}/>
-  );
-  const row = (label, hist) => (
-    <div style={{ display:"flex", alignItems:"center", gap:6 }}>
-      <span style={{ fontFamily:"monospace", fontSize:10, color:MUTED, minWidth:44 }}>{label}</span>
-      <div style={{ display:"flex", gap:3, flexWrap:"wrap" }}>
-        {Array.from({ length:n }, (_,i) => cell(hist[i], `${label}${i}`))}
-      </div>
-    </div>
-  );
+// ── Hallucination-risk meter: fire-danger-style gauge for aggregate trust ───
+// A turn-by-turn trace answers "how did confidence change" — the question
+// that actually matters is "should I trust this conversation overall," so
+// the meter blends every turn into one needle position instead. Styled after
+// roadside forest fire-danger signs: a banded arc, a needle, one word.
+const RISK_ZONES = [
+  { min:0,    max:0.25,  label:"LOW",      color:"#16a34a" },
+  { min:0.25, max:0.50,  label:"MODERATE", color:"#1d4ed8" },
+  { min:0.50, max:0.75,  label:"HIGH",     color:"#d97706" },
+  { min:0.75, max:1.001, label:"EXTREME",  color:"#991b1b" },
+];
+const riskZone = score => RISK_ZONES.find(z => score>=z.min && score<z.max) ?? RISK_ZONES[RISK_ZONES.length-1];
+
+// Blends self-report and logprob confidence into one per-turn score, then lets
+// a fact-check verdict override an overconfident self-report — a model
+// contradicted by its own cited source is a worse tell than one that was
+// merely uncertain, regardless of what it claimed at the time.
+const BUCKET_CONF = { LOW:0.2, MID:0.55, HIGH:0.9 };
+function turnConfidence(m) {
+  const parts = [];
+  if (m.confidence) parts.push(BUCKET_CONF[m.confidence]);
+  const logprobBucket = m.logprobConfidence != null ? bucketize(m.logprobConfidence) : null;
+  if (logprobBucket) parts.push(BUCKET_CONF[logprobBucket]);
+  if (parts.length === 0) return null;
+  let conf = parts.reduce((a,b) => a+b, 0) / parts.length;
+  const verdict = m.factCheck?.verdict;
+  if (verdict === "CONTRADICTED")      conf = Math.min(conf, 0.08);
+  else if (verdict === "NO_ARTICLE")   conf = Math.min(conf, 0.05);
+  else if (verdict === "UNVERIFIABLE") conf = Math.min(conf, 0.4);
+  return conf;
+}
+
+function polarPoint(cx, cy, r, angleDeg) {
+  const a = angleDeg * Math.PI / 180;
+  return { x: cx + r*Math.cos(a), y: cy - r*Math.sin(a) };
+}
+// Bands sweep left (score 0) to right (score 1) over the top of the arc, each
+// inset by half a gap from its neighbours so adjacent fills don't touch.
+function bandPath(cx, cy, r, startAngle, endAngle) {
+  const s = polarPoint(cx, cy, r, startAngle);
+  const e = polarPoint(cx, cy, r, endAngle);
+  return `M ${s.x} ${s.y} A ${r} ${r} 0 0 1 ${e.x} ${e.y}`;
+}
+
+function HallucinationMeter({ score, n, flags }) {
+  const cx=100, cy=92, r=76, gap=2.5;
+  const zone = score!=null ? riskZone(score) : null;
+  const needleAngle = 180 - (score ?? 0)*180;
+  const tip = polarPoint(cx, cy, r-16, needleAngle);
   return (
-    <div style={{ display:"flex", flexDirection:"column", gap:6 }}>
-      {row("self", selfHist)}
-      {row("logprob", logprobHist)}
+    <div style={{ display:"flex", flexDirection:"column", alignItems:"center" }}>
+      <svg viewBox="0 0 200 104" width="100%" style={{ maxWidth:260 }}>
+        {RISK_ZONES.map((z,i) => {
+          const startAngle = 180 - z.min*180 - (i===0 ? 0 : gap/2);
+          const endAngle   = 180 - z.max*180 + (i===RISK_ZONES.length-1 ? 0 : gap/2);
+          return <path key={z.label} d={bandPath(cx,cy,r,startAngle,endAngle)}
+            stroke={z.color} strokeWidth={16} fill="none"/>;
+        })}
+        {score!=null && <>
+          <line x1={cx} y1={cy} x2={tip.x} y2={tip.y}
+            stroke={TEXT} strokeWidth={3} strokeLinecap="round"/>
+          <circle cx={cx} cy={cy} r={5.5} fill={TEXT}/>
+        </>}
+      </svg>
+      {score==null
+        ? <div style={{ fontFamily:"monospace", fontSize:13, color:FAINT, marginTop:2 }}>Accumulating data…</div>
+        : <>
+            <div style={{ fontFamily:"monospace", fontSize:26, fontWeight:700, color:zone.color, marginTop:2 }}>
+              {zone.label}
+            </div>
+            <div style={{ fontFamily:"monospace", fontSize:12, color:MUTED, marginTop:4 }}>
+              {Math.round(score*100)}% risk · n={n}{flags>0 ? ` · ${flags} flagged` : ""}
+            </div>
+          </>
+      }
     </div>
   );
 }
@@ -240,10 +292,6 @@ export default function HonestAgent() {
   const [input,       setInput]       = useState("");
   const [isThinking,  setIsThinking]  = useState(false);
   const [thinkLabel,  setThinkLabel]  = useState("Thinking…");
-  const [currentConf, setCurrentConf] = useState(null);
-  const [currentLogprobConf, setCurrentLogprobConf] = useState(null);
-  const [selfHist,     setSelfHist]     = useState([]);
-  const [logprobHist,  setLogprobHist]  = useState([]);
   const [toolLog,     setToolLog]     = useState([]);
   const [isDeferring, setIsDeferring] = useState(false);
   const [tab,         setTab]         = useState("signal");
@@ -389,11 +437,7 @@ export default function HonestAgent() {
   const clearSession = () => {
     setChatMsgs([]);
     setApiHistory([]);
-    setSelfHist([]);
-    setLogprobHist([]);
     setToolLog([]);
-    setCurrentConf(null);
-    setCurrentLogprobConf(null);
     setIsDeferring(false);
   };
 
@@ -458,7 +502,6 @@ export default function HonestAgent() {
       .replace(/\[SOURCE:[^\]]+\]\s*/gi, "")
       .trim();
     const logprobConf = typeof finalData.logprob_confidence === "number" ? finalData.logprob_confidence : null;
-    const logprobBucket = bucketize(logprobConf);
     const defer = conf === "LOW";
     // Fact-check whenever self-report is LOW, the answer is ungrounded (TRAINING), or the
     // answer claims KB grounding — the last one closes a real gap: a model can claim
@@ -467,9 +510,7 @@ export default function HonestAgent() {
     // record). TOOLS stays excluded — live API results aren't Wikipedia-checkable claims.
     const shouldFactCheck = conf === "LOW" || src === "TRAINING" || src === "KB";
 
-    if (conf !== null) setSelfHist(prev => [...prev, conf]);
-    if (logprobBucket !== null) setLogprobHist(prev => [...prev, logprobBucket]);
-    setCurrentConf(conf); setCurrentLogprobConf(logprobConf); setIsDeferring(defer);
+    setIsDeferring(defer);
     setToolLog(prev => [...prev, ...newTools]);
     setApiHistory(hist);
     const msgId = nextMsgId.current++;
@@ -479,8 +520,18 @@ export default function HonestAgent() {
     inputRef.current?.focus();
   };
 
+  // ── Hallucination risk: average per-turn confidence into one aggregate
+  // score for the whole conversation, recomputed only when the transcript changes.
+  const riskStats = useMemo(() => {
+    const confs = chatMsgs.filter(m => m.role==="assistant").map(turnConfidence).filter(c => c!=null);
+    if (confs.length === 0) return null;
+    const avgConf = confs.reduce((a,b) => a+b, 0) / confs.length;
+    const flags = chatMsgs.filter(m =>
+      m.factCheck?.verdict==="CONTRADICTED" || m.factCheck?.verdict==="NO_ARTICLE").length;
+    return { score: 1-avgConf, n: confs.length, flags };
+  }, [chatMsgs]);
+
   // ── Render helpers
-  const col     = bucketColor(currentConf);
   const tabBtn  = (id, label) => ({
     flex:1, background:"transparent", border:"none",
     borderBottom: tab===id ? `2px solid ${ACCENT}` : "2px solid transparent",
@@ -720,61 +771,23 @@ export default function HonestAgent() {
           {tab==="signal" && (
             <div style={{ flex:1, overflowY:"auto", padding:"18px 20px" }}>
               <div style={{ fontSize:11, fontFamily:"monospace", color:MUTED,
-                letterSpacing:"0.13em", marginBottom:12 }}>SELF-REPORTED CONFIDENCE</div>
+                letterSpacing:"0.13em", marginBottom:12 }}>HALLUCINATION RISK</div>
 
-              <div style={{ display:"flex", alignItems:"baseline", gap:10, marginBottom:10 }}>
-                <span style={{ fontFamily:"monospace", fontSize:36, fontWeight:700,
-                  color:col, lineHeight:1, transition:"color 0.4s" }}>
-                  {currentConf ?? "—"}
-                </span>
-                <span style={{ fontFamily:"monospace", fontSize:12, color:col }}>
-                  {bucketLabel(currentConf)}
-                </span>
-              </div>
-              <BucketBar bucket={currentConf} size="lg"/>
-              <div style={{ display:"flex", justifyContent:"space-between", marginTop:8, marginBottom:24 }}>
-                <span style={{ fontFamily:"monospace", fontSize:12, color:"#b45309" }}>
-                  auto-defer on LOW
-                </span>
-                <span style={{ fontFamily:"monospace", fontSize:12, color:FAINT }}>n={selfHist.length}</span>
-              </div>
+              <HallucinationMeter score={riskStats?.score ?? null} n={riskStats?.n ?? 0} flags={riskStats?.flags ?? 0}/>
 
-              <div style={{ fontSize:11, fontFamily:"monospace", color:MUTED,
-                letterSpacing:"0.13em", marginBottom:12 }}>LOGPROB CONFIDENCE</div>
-              <div style={{ display:"flex", alignItems:"baseline", gap:10, marginBottom:10 }}>
-                <span style={{ fontFamily:"monospace", fontSize:36, fontWeight:700,
-                  color:bucketColor(bucketize(currentLogprobConf)), lineHeight:1 }}
-                  title={currentLogprobConf!==null ? `${(currentLogprobConf*100).toFixed(0)}%` : undefined}>
-                  {bucketize(currentLogprobConf) ?? "—"}
-                </span>
-                <span style={{ fontFamily:"monospace", fontSize:12, color:bucketColor(bucketize(currentLogprobConf)) }}>
-                  {bucketLabel(bucketize(currentLogprobConf))}
+              <div style={{ display:"flex", justifyContent:"center", gap:14, marginTop:14, marginBottom:8 }}>
+                {RISK_ZONES.map(z => (
+                  <div key={z.label} style={{ display:"flex", alignItems:"center", gap:5 }}>
+                    <div style={{ width:7, height:7, borderRadius:2, background:z.color }}/>
+                    <span style={{ fontFamily:"monospace", fontSize:10, color:MUTED }}>{z.label.toLowerCase()}</span>
+                  </div>
+                ))}
+              </div>
+              <div style={{ marginBottom:24, textAlign:"center" }}>
+                <span style={{ fontFamily:"monospace", fontSize:11, color:FAINT }}>
+                  self-report + logprob + fact-checks, averaged across the conversation
                 </span>
               </div>
-              <BucketBar bucket={bucketize(currentLogprobConf)} size="lg"/>
-              <div style={{ marginTop:8, marginBottom:24 }}>
-                <span style={{ fontFamily:"monospace", fontSize:12, color:FAINT }}>
-                  exp(avg logprob) over answer span
-                </span>
-              </div>
-
-              <div style={{ fontSize:11, fontFamily:"monospace", color:MUTED,
-                letterSpacing:"0.13em", marginBottom:8 }}>CONFIDENCE TRACE</div>
-              {selfHist.length < 1
-                ? <div style={{ fontFamily:"monospace", fontSize:13, color:FAINT }}>Accumulating data…</div>
-                : <>
-                    <ConfidenceTrace selfHist={selfHist} logprobHist={logprobHist}/>
-                    <div style={{ display:"flex", gap:14, marginTop:10 }}>
-                      {[["#dc2626","low"],["#b45309","mid"],["#16a34a","high"]]
-                        .map(([c,l]) => (
-                          <div key={l} style={{ display:"flex", alignItems:"center", gap:5 }}>
-                            <div style={{ width:7, height:7, borderRadius:2, background:c }}/>
-                            <span style={{ fontFamily:"monospace", fontSize:11, color:MUTED }}>{l}</span>
-                          </div>
-                        ))}
-                    </div>
-                  </>
-              }
 
               {/* Source legend */}
               <div style={{ marginTop:24, paddingTop:16, borderTop:`1px solid ${BORDER}` }}>
