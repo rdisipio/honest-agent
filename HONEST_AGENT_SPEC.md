@@ -78,7 +78,7 @@ ever implemented.
 
 ```
 HonestAgent                    ← default export, all state lives here
-├── Header bar
+├── Header bar                 ← ↺ Clear session button, resets conversation but keeps kb
 ├── Left panel (60%)
 │   ├── Message list           ← chatMsgs[], scrollable
 │   │   ├── User bubble         ← ↻ retry button, re-asks via sendMessage(m.content)
@@ -452,6 +452,15 @@ meaning.
   is about the Wanderers' home opener specifically, and Dec 19 1917 had two simultaneous league
   games — "the first game" is itself genuinely ambiguous). More available text doesn't help if
   the claim being checked isn't specific enough to line up with it.
+- **The model anchors on its own prior turns even when the system prompt changes.** Observed
+  live: KB was updated mid-conversation (Wayne Gretzky article added) and the same question was
+  retried — the system prompt correctly rebuilds from current `kb` every turn (verified in
+  code, not a bug), but the model still repeated its earlier wrong answer rather than
+  reconsidering given the new grounding. It had both the updated system prompt *and* its own
+  prior confident assertion in view, and stuck with the latter. `clearSession()` (P1-1) is a
+  workaround — it lets you force a clean-history retry — not a fix for the underlying
+  tendency, which would need something like an explicit "new information has been added,
+  reconsider prior answers" nudge injected into history to actually address.
 
 ---
 
