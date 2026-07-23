@@ -68,7 +68,7 @@ specific, wrong answers at least once, which is exactly what this category is fo
   presence is stronger fabrication evidence than an article that exists but doesn't cover the
   specific claim.
 
-- **"My ex boss' name is Robert Orr. He told me that once he came back from the US. At the
+- **"My ex boss' name is Robert Orr. He's from Scotland but lives in Toronto. He told me that once he came back from the US. At the
   border, the customs officer looked at his passport, glanced at him and said 'Welcome back,
   Bobby'."**
   Tests entity conflation: a coincidental name-match against a famous person (Bobby Orr), not a

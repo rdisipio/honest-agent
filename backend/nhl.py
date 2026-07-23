@@ -73,6 +73,22 @@ def _goalie_summary(box: dict, side: str) -> list[dict]:
     ]
 
 
+def _top_scorers(box: dict, side: str, limit: int = 3) -> list[dict]:
+    skaters = box["playerByGameStats"][side]["forwards"] + box["playerByGameStats"][side]["defense"]
+    scored = [p for p in skaters if p.get("points", 0) > 0]
+    ranked = sorted(scored, key=lambda p: (p["points"], p["goals"]), reverse=True)
+    return [
+        {
+            "name": p["name"]["default"],
+            "position": p["position"],
+            "goals": p["goals"],
+            "assists": p["assists"],
+            "points": p["points"],
+        }
+        for p in ranked[:limit]
+    ]
+
+
 async def fetch_game_details(team1: str, team2: str, date: str) -> dict:
     abbrev1 = resolve_team(team1)
     abbrev2 = resolve_team(team2)
@@ -112,6 +128,8 @@ async def fetch_game_details(team1: str, team2: str, date: str) -> dict:
         "home_score": box["homeTeam"]["score"],
         "away_goalies": _goalie_summary(box, "awayTeam"),
         "home_goalies": _goalie_summary(box, "homeTeam"),
+        "away_top_scorers": _top_scorers(box, "awayTeam"),
+        "home_top_scorers": _top_scorers(box, "homeTeam"),
     }
 
 

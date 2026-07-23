@@ -306,7 +306,7 @@ const TOOLS_DEF = [
     parameters:{ type:"object", properties:{ location:{type:"string"} }, required:["location"] }}},
   { type:"function", function:{ name:"get_game_result", description:"Get the result of the most recent game played by a hockey team.",
     parameters:{ type:"object", properties:{ team:{type:"string"} }, required:["team"] }}},
-  { type:"function", function:{ name:"get_game_details", description:"Get the details of a specific past NHL game between two teams on a given date, including which goalie started for each team, decision, and saves. Use this for questions about a particular game rather than a team's most recent result.",
+  { type:"function", function:{ name:"get_game_details", description:"Get the details of a specific past NHL game between two teams on a given date: final score, each team's starting goalie (decision, saves), and each team's top scorers (goals, assists, points). Use this for questions about a particular game rather than a team's most recent result.",
     parameters:{ type:"object", properties:{
       team1:{type:"string", description:"One of the two teams, e.g. 'Canadiens' or 'Habs'."},
       team2:{type:"string", description:"The other team, e.g. 'Maple Leafs' or 'Leafs'."},
